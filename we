@@ -1,0 +1,427 @@
+#!/bin/bash
+# ============================================================================
+# we - work-env profile manager (main script)
+#
+# Intended use: source this file from ~/.bashrc or ~/.profile
+#     source "$HOME/.we/we"
+#
+# Everything we-related lives in $WE_DIR (default: $HOME/.we):
+#
+#   $WE_DIR/we                  this script (sourced at login)
+#   $WE_DIR/funcs.sh            profile-shell tools: walias, wcd (sourced here
+#                               and inside every profile subshell)
+#   $WE_DIR/we_alias            base aliases, active in every shell (optional)
+#   $WE_DIR/we_<name>           profile setup script for profile <name>
+#   $WE_DIR/we_<name>_alias     persisted aliases for profile <name>
+#   $WE_DIR/state/              per-session snapshots / rc files (auto-managed)
+#
+# Usage:
+#   we              prompt for a profile name and create it
+#   we <name>       create profile <name>
+#   we ls           list profiles
+#   we show <name>  show profile setup + aliases
+#   we del <name>   delete a profile
+#   we help         this help
+#
+# After creating profile "foo", typing `foo` in a terminal opens a subshell
+# that inherits all exported/local variables, functions and aliases from the
+# parent shell, then applies $WE_DIR/we_foo and $WE_DIR/we_foo_alias.
+# Inside, use walias / wcd to add profile-specific aliases. On exit they are
+# persisted automatically.
+# ============================================================================
+
+# --- setup -----------------------------------------------------------------
+: "${WE_DIR:=$HOME/.we}"
+export WE_DIR
+
+WE_VERSION=2.0
+
+mkdir -p -- "$WE_DIR/state" 2>/dev/null || {
+    printf 'we: cannot create %s/state, is $HOME writable?\n' "$WE_DIR" >&2
+    return 0 2>/dev/null || exit 1
+}
+# sweep state files older than a day (orphans from interrupted sessions)
+find "$WE_DIR/state" -maxdepth 1 -type f -mmin +1440 -delete 2>/dev/null || :
+
+# profile tools are available in the base shell too (they then persist to the
+# base alias file $WE_DIR/we_alias)
+# shellcheck source=funcs.sh
+[ -f "$WE_DIR/funcs.sh" ] && . "$WE_DIR/funcs.sh"
+
+# base aliases (plain `alias` lines), kept for compatibility with v1
+[ -f "$WE_DIR/we_alias" ] && . "$WE_DIR/we_alias"
+
+# --- internal helpers --------------------------------------------------------
+
+# names allowed for a profile
+_we_valid_name() {
+    local n=$1
+    [[ $n =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 1
+    [[ $n != alias ]] || return 1
+    [[ $n != we ]] || return 1
+    return 0
+}
+
+# list profile names found in $WE_DIR (files we_<name> without _alias suffix)
+_we_profiles() {
+    local f b
+    for f in "$WE_DIR"/we_*; do
+        [ -f "$f" ] || continue
+        b=${f##*/}
+        b=${b#we_}
+        [[ $b == alias ]] && continue
+        [[ $b == *_alias ]] && continue
+        printf '%s\n' "$b"
+    done
+}
+
+# define the entry command for a profile:  <name>  ->  we_enter <name>
+# an alias with the same name would shadow the function (alias expansion
+# happens first), so drop it
+_we_register_profile() {
+    local n=$1
+    unalias -- "$n" 2>/dev/null
+    eval "$n() { we_enter '$n'; }"
+}
+
+# register an entry command for every existing profile
+_we_register_all_profiles() {
+    local n
+    while IFS= read -r n; do
+        [ -n "$n" ] && _we_register_profile "$n"
+    done < <(_we_profiles)
+}
+
+# ---------------------------------------------------------------------------
+# we_enter <profile>
+#   snapshot the current (parent) shell state, render a private rcfile and
+#   start the profile subshell. The subshell exits back here on `exit`.
+# ---------------------------------------------------------------------------
+we_enter() {
+    local prof=${1-}
+    local rc sid
+    if [ -z "$prof" ]; then
+        printf 'we: internal error: we_enter called without profile name\n' >&2
+        return 1
+    fi
+    [ -f "$WE_DIR/we_$prof" ] || {
+        printf 'we: no such profile: %s (create it with: we %s)\n' "$prof" "$prof" >&2
+        return 1
+    }
+    [ -f "$WE_DIR/we_${prof}_alias" ] || : > "$WE_DIR/we_${prof}_alias"
+
+    # unique id for this session (two terminals can run the same profile)
+    sid="${BASHPID}_$$"
+
+    # --- snapshot parent shell state ---------------------------------------
+    # shell options: functions may contain extglob patterns which are a
+    # syntax error to parse with extglob off, so the child restores the
+    # parent's shopt state (see _we_render_rc).
+    ( shopt -p ) > "$WE_DIR/state/${sid}.shopt" 2>/dev/null || : > "$WE_DIR/state/${sid}.shopt"
+
+    # aliases: plain `alias` output is re-sourcing safe
+    ( alias ) > "$WE_DIR/state/${sid}.aliases" 2>/dev/null || : > "$WE_DIR/state/${sid}.aliases"
+
+    # functions: `declare -f` output is re-sourcing safe
+    ( declare -f ) > "$WE_DIR/state/${sid}.funcs" 2>/dev/null || : > "$WE_DIR/state/${sid}.funcs"
+
+    # non-exported, non-readonly variables (exported ones are inherited by the
+    # child process automatically; readonly/special vars would error on reset)
+    _we_snapshot_vars > "$WE_DIR/state/${sid}.vars" 2>/dev/null || : > "$WE_DIR/state/${sid}.vars"
+
+    # --- render the profile rcfile ------------------------------------------
+    rc="$WE_DIR/state/rc_${prof}_${sid}"
+    _we_render_rc "$prof" "$sid" "$rc" || return 1
+
+    # --- start the profile subshell ------------------------------------------
+    # stdin is a terminal -> normal interactive child bash
+    # no terminal (pipes/tests) -> force interactive so --rcfile is honoured
+    # NOTE: bash requires the long option first: --rcfile must lead
+    if [ -t 0 ]; then
+        bash --rcfile "$rc"
+    else
+        bash --rcfile "$rc" -i
+    fi
+
+    # child is back; its EXIT trap has already persisted profile aliases
+    rm -f -- "$rc" "$WE_DIR/state/${sid}"* 2>/dev/null
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# _we_snapshot_vars
+#   print `declare -p ...` lines for every variable that must be re-created
+#   in the child shell: not exported (child already has those), not readonly,
+#   not one of bash's special/managed variables.
+# ---------------------------------------------------------------------------
+_we_snapshot_vars() {
+    local name line rest attrs
+    # compgen -v lists every shell variable name (robust against names that
+    # would break parameter expansion or array subscripts)
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        [[ $name == BASH_* ]] && continue      # includes BASH_FUNC_* env names
+        [[ $name == _BASH_FUNC_* ]] && continue
+        # bash special/managed variables: cannot (or must not) be re-assigned
+        # in the child shell. (case patterns, not array subscripts: variable
+        # names may contain characters that break associative subscripts.)
+        case $name in
+            BASH|BASHPID|COLUMNS|COMP_LINE|COMP_POINT|COMP_TYPE|DIRSTACK|EUID|FUNCNAME|HISTCMD|HOSTNAME|HOSTTYPE|IFS|LINENO|LINES|MACHTYPE|OLDPWD|OPTERR|OPTIND|OSTYPE|PIPESTATUS|PPID|PWD|RANDOM|SECONDS|SHELLOPTS|SHLVL|UID|_) continue;;
+        esac
+        line=$(declare -p -- "$name" 2>/dev/null) || continue
+        # line: declare [-attrs] name=value  (value may span lines: keep whole)
+        rest=${line#declare }
+        attrs=
+        if [[ $rest == -* ]]; then
+            attrs=${rest%% *}        # e.g. "-x", "-ar", "--" (no attributes)
+        fi
+        [[ $attrs == *r* ]] && continue   # readonly: cannot and must not reset
+        [[ $attrs == *x* ]] && continue   # exported: inherited by the child
+        printf '%s\n' "$line"
+    done < <(compgen -v)
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# _we_render_rc <profile> <sid> <rcfile>
+# ---------------------------------------------------------------------------
+_we_render_rc() {
+    local prof=$1 sid=$2 rc=$3
+    cat > "$rc" <<WE_RC_EOF
+# we: rcfile for profile '$prof' (generated, do not edit)
+shopt -s expand_aliases
+WE_DIR='$WE_DIR'
+WE_PROFILE='$prof'
+export WE_PROFILE
+
+# 1) inherit parent shell state (snapshot taken at entry time).
+#    extglob is forced on while parsing the snapshots: functions sourced from
+#    the parent may contain extglob patterns (e.g. bash-completion), which
+#    are a syntax error to parse with extglob off. The parent's exact shopt
+#    state is restored right afterwards, so interactive behaviour matches.
+shopt -s extglob
+[ -f "$WE_DIR/state/${sid}.vars" ]     && . "$WE_DIR/state/${sid}.vars"
+[ -f "$WE_DIR/state/${sid}.funcs" ]    && . "$WE_DIR/state/${sid}.funcs"
+[ -f "$WE_DIR/state/${sid}.aliases" ]  && . "$WE_DIR/state/${sid}.aliases"
+[ -f "$WE_DIR/state/${sid}.shopt" ]    && . "$WE_DIR/state/${sid}.shopt"
+
+# 2) baseline of aliases before profile-specific ones: used on exit to
+#    persist only what belongs to this profile
+alias > "\$WE_DIR/state/${sid}.pre" 2>/dev/null || : > "\$WE_DIR/state/${sid}.pre"
+
+# 3) profile setup, then profile aliases (profile wins over parent on conflict)
+[ -f "\$WE_DIR/we_$prof" ]          && . "\$WE_DIR/we_$prof"
+[ -f "\$WE_DIR/we_${prof}_alias" ]  && . "\$WE_DIR/we_${prof}_alias"
+
+# 4) profile tools: walias, wcd (persist into we_${prof}_alias)
+[ -f "\$WE_DIR/funcs.sh" ] && . "\$WE_DIR/funcs.sh"
+
+# 5) prompt: keep the profile visible
+PS1='\\[\\e[01;36m\\]we:$prof\\[\\e[0m\\] \\w \\$ '
+
+# 6) persist profile-specific aliases when the subshell exits
+trap '_we_profile_exit_save "'"$prof"'" "'"$sid"'"' EXIT
+WE_RC_EOF
+    return $?
+}
+
+# ---------------------------------------------------------------------------
+# we <args>
+# ---------------------------------------------------------------------------
+we() {
+    local cmd=${1-} name
+    case $cmd in
+        '')
+            printf '\n\t\twe - work env\n\n\tname: '
+            IFS= read -r name
+            [ -z "$name" ] && { printf '\nwe: a profile name is required\n'; return 1; }
+            _we_create "$name"
+            ;;
+        we|ls|list)
+            _we_list
+            ;;
+        show)
+            _we_show "${2-}"
+            ;;
+        del|rm|remove)
+            _we_del "${2-}"
+            ;;
+        help|-h|--help)
+            _we_help
+            ;;
+        -*)
+            # e.g. `we -v`
+            case $cmd in
+                -v|--version) printf 'we %s\n' "$WE_VERSION" ;;
+                *) printf 'we: unknown option: %s (try: we help)\n' "$cmd" >&2; return 1 ;;
+            esac
+            ;;
+        *)
+            # bare name -> create profile (matches v1 behaviour of `we foo`)
+            _we_create "$cmd"
+            ;;
+    esac
+}
+
+_we_create() {
+    local name=$1
+    if ! _we_valid_name "$name"; then
+        printf 'we: invalid profile name: %s\n' "$name" >&2
+        printf 'we: names start with a letter/digit, then [A-Za-z0-9._-]\n' >&2
+        return 1
+    fi
+
+    # do not clobber unrelated commands silently
+    local kind; kind=$(type -t -- "$name" 2>/dev/null)
+    case $kind in
+        function|alias)
+            printf 'we: %s already exists as %s; it will be replaced by the profile command\n' "$name" "$kind"
+            ;;
+        builtin|command)
+            printf 'we: cannot create profile %q: it would shadow the existing %s\n' "$name" "$kind" >&2
+            return 1
+            ;;
+    esac
+
+    local setup="$WE_DIR/we_$name"
+    local alfile="$WE_DIR/we_${name}_alias"
+    local existed=0
+    [ -f "$setup" ] && existed=1
+
+    if [ "$existed" -eq 0 ]; then
+        {
+            printf '#!/bin/bash\n'
+            printf '# we profile: %s\n' "$name"
+            printf '# created: %s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo unknown)"
+            printf '# Profile setup: runs in the %s subshell AFTER the parent\n' "$name"
+            printf '# shell state has been inherited. Edit freely.\n'
+            printf '\n'
+            printf 'cd %q\n' "$PWD"
+            printf '\n'
+        } > "$setup"
+        : > "$alfile"
+    else
+        printf 'we: profile %s already exists; keeping %s and %s\n' "$name" "$setup" "$alfile"
+    fi
+
+    # make `name` work in this shell (also drops any alias shadowing it)
+    _we_register_profile "$name"
+
+    printf '\n'
+    printf '\t - work env %s %s\n' "$name" "$([ $existed -eq 0 ] && echo created || echo re-registered)"
+    printf '\t - run %s to enter the %s subshell; exit to come back\n' "$name" "$name"
+    printf '\t - inside: walias <name> <command>   e.g. walias b /x/.venv/bin/python'
+    [ -s "$alfile" ] && printf ' (existing aliases are listed below)'
+    printf '\n'
+    printf '\t - inside: wcd <name>                e.g. wcd m   (maps m -> current dir)\n'
+    [ -s "$alfile" ] && { printf '\n\t - current %s aliases:\n' "$name"; grep '^alias ' "$alfile" | sed 's/^/       /'; }
+    printf '\n'
+    return 0
+}
+
+_we_list() {
+    local n found=0
+    printf 'we profiles:\n'
+    while IFS= read -r n; do
+        [ -n "$n" ] || continue
+        found=1
+        local cnt=0
+        [ -f "$WE_DIR/we_${n}_alias" ] && cnt=$(grep -c '^alias ' "$WE_DIR/we_${n}_alias" 2>/dev/null)
+        printf '  %-16s %s alias(es)\n' "$n" "${cnt:-0}"
+    done < <(_we_profiles)
+    [ "$found" -eq 0 ] && printf '  (none)\n'
+    return 0
+}
+
+_we_show() {
+    local name=${1-}
+    if [ -z "$name" ] || [ ! -f "$WE_DIR/we_$name" ]; then
+        printf 'we: show: usage: we show <profile>\n' >&2
+        return 1
+    fi
+    printf '== %s ==\n' "$WE_DIR/we_$name"
+    cat "$WE_DIR/we_$name"
+    printf '\n== %s ==\n' "$WE_DIR/we_${name}_alias"
+    cat "$WE_DIR/we_${name}_alias" 2>/dev/null || printf '(none)\n'
+    return 0
+}
+
+_we_del() {
+    local name=${1-}
+    if [ -z "$name" ]; then
+        printf 'we: del: usage: we del <profile>\n' >&2
+        return 1
+    fi
+    if [ ! -f "$WE_DIR/we_$name" ] && [ ! -f "$WE_DIR/we_${name}_alias" ]; then
+        printf 'we: no such profile: %s\n' "$name" >&2
+        return 1
+    fi
+    printf 'we: delete profile %s and its aliases? [y/N] ' "$name"
+    local ans
+    IFS= read -r ans
+    case $ans in
+        y|Y|yes|YES) ;;
+        *) printf 'we: aborted\n'; return 1 ;;
+    esac
+    rm -f -- "$WE_DIR/we_$name" "$WE_DIR/we_${name}_alias"
+    rm -f -- "$WE_DIR"/state/rc_${name}_* 2>/dev/null
+    # v1 compat: drop an entry alias with this name from the base alias file
+    if [ -f "$WE_DIR/we_alias" ]; then
+        local tmp="$WE_DIR/state/del_${name}_$$_tmp"
+        grep -v -E "^alias ${name//./\\.}=" "$WE_DIR/we_alias" > "$tmp" 2>/dev/null || : > "$tmp"
+        mv -- "$tmp" "$WE_DIR/we_alias"
+    fi
+    if type -f -- "$name" >/dev/null 2>&1 && type "$name" | grep -q 'we_enter'; then
+        unset -f -- "$name"
+    fi
+    # also drop a v1-style entry alias with this name
+    unalias -- "$name" 2>/dev/null
+    printf 'we: profile %s deleted\n' "$name"
+    return 0
+}
+
+_we_help() {
+    cat <<'EOF'
+we - work-env profile manager
+
+usage:
+  we               prompt for a name and create a profile
+  we <name>        create profile <name>
+  we ls            list profiles and their alias counts
+  we show <name>   show profile setup file and its aliases
+  we del <name>    delete a profile (with confirmation)
+  we -v            show version
+  we help          this help
+
+entering a profile:
+  after `we foo`, run `foo` in a terminal. A subshell starts that has
+  inherited all exported/local variables, functions and aliases of the
+  parent shell, plus the aliases saved in $WE_DIR/we_foo_alias.
+  The file $WE_DIR/we_foo (profile setup) is also executed.
+
+inside a profile subshell:
+  walias <name> <command>   create a profile alias   e.g. walias b /x/.venv/bin/python
+  wcd <name>                map <name> to the current dir  e.g. wcd m
+  exit                      leave the subshell; new aliases are persisted
+                            to $WE_DIR/we_foo_alias automatically
+
+files (all in $WE_DIR, default $HOME/.we):
+  we                 this script (source it from .bashrc/.profile)
+  funcs.sh           walias / wcd implementation
+  we_alias           base aliases for every shell (optional)
+  we_<name>          profile setup script
+  we_<name>_alias    persisted aliases of profile <name>
+  state/             session snapshots and rcfiles (managed, do not edit)
+EOF
+    return 0
+}
+
+# --- register entry commands for all existing profiles ----------------------
+_we_register_all_profiles
+
+# export the interface (and its closure) so child scripts/shells can use it
+export -f we we_enter _we_create _we_list _we_show _we_del _we_help \
+           _we_valid_name _we_profiles _we_register_profile \
+           _we_register_all_profiles _we_snapshot_vars _we_render_rc 2>/dev/null
+
+return 0 2>/dev/null || true
