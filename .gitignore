@@ -1,0 +1,6 @@
+# local working files, not part of the we engine
+compacted-context.md
+
+# test sandbox (created under /tmp by default, but ignore any in-tree copy)
+/we_sandbox
+*.tmp.*
