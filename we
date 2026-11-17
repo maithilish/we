@@ -498,12 +498,36 @@ EOF
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# _we_root_cleanup <root_sid>
+#   Remove this base shell's root snapshot files. Installed as the base
+#   shell's EXIT trap so the root_* files don't linger after the shell exits;
+#   the 1-day sweep at source time is the backstop for shells that die without
+#   running their trap (e.g. SIGKILL).
+# ---------------------------------------------------------------------------
+_we_root_cleanup() {
+    local sid=${1-}
+    [ -n "$sid" ] || return 0
+    rm -f -- "$WE_DIR"/state/root_"${sid}".* 2>/dev/null
+    return 0
+}
+
 # --- register entry commands for all existing profiles ----------------------
 _we_register_all_profiles
+
+# --- root snapshot cleanup on base-shell exit --------------------------------
+# Keyed to this base shell's PID (== the root_sid we_enter computes on first
+# entry). We only install the trap when the user has no EXIT trap of their
+# own: chaining EXIT traps in bash is fragile, and the sweep covers the rest.
+_we_base_root_sid="${BASHPID}_$$"
+if [ -z "$(trap -p EXIT 2>/dev/null)" ]; then
+    trap '_we_root_cleanup "'"$_we_base_root_sid"'"' EXIT
+fi
 
 # export the interface (and its closure) so child scripts/shells can use it
 export -f we we_enter _we_switch _we_create _we_list _we_show _we_del _we_help \
            _we_valid_name _we_profiles _we_register_profile \
-           _we_register_all_profiles _we_snapshot_vars _we_render_rc 2>/dev/null
+           _we_register_all_profiles _we_snapshot_vars _we_render_rc \
+           _we_root_cleanup 2>/dev/null
 
 return 0 2>/dev/null || true

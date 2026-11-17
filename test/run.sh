@@ -284,6 +284,20 @@ ok "swt alias persisted"           "grep -q \"^alias swtonly='echo swtonly'\" '$
 ok "swt file has no swfonly"       "! grep -q swfonly '$SANDBOX/.we/we_swt_alias'"
 ok "state clean after switch"      "[ -z \"$(ls -A '$SANDBOX/.we/state' 2>/dev/null | grep -v '^root_')\" ]"
 
+# --- T9: root snapshot cleanup on base-shell exit ---------------------------
+# The base shell's EXIT trap removes its root_* files, so the state dir is
+# empty once the base shell (here: the test subshell) has exited.
+section "T9 root cleanup on base exit"
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    we rcprof >/dev/null 2>&1
+    rcprof
+) < /dev/null > "$CAPTURE" 2>&1
+ok "state empty after base exit" "[ -z \"$(ls -A '$SANDBOX/.we/state' 2>/dev/null)\" ]"
+
 # ============================================================================
 printf '\n========================================\n'
 printf 'TOTAL: pass=%d fail=%d\n' "$PASS" "$FAIL"

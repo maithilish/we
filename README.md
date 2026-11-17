@@ -105,3 +105,7 @@ to the base alias file `~/.we/we_alias` instead.
   profile only sees what it inherited from your shell plus its own files.
 * Re-sourcing `~/.we/we` is safe and idempotent.
 * `WE_DIR` can be set before sourcing to relocate the whole thing.
+* Lifecycle: each profile session removes its own `state/` files on exit;
+  the base shell removes its `root_*` snapshot on exit (only if you have no
+  EXIT trap of your own). A 1-day sweep at source time is the backstop for
+  shells that die without running their traps.
