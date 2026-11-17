@@ -109,3 +109,7 @@ to the base alias file `~/.we/we_alias` instead.
   the base shell removes its `root_*` snapshot on exit (only if you have no
   EXIT trap of your own). A 1-day sweep at source time is the backstop for
   shells that die without running their traps.
+* Edge cases: switching to the profile you are already in gives a fresh
+  session (no alias doubling); creating a profile from inside another warns
+  that the entry command is only registered in this shell; `we del` refuses
+  to delete the profile you are currently inside.

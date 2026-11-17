@@ -397,6 +397,14 @@ _we_create() {
     printf '\n'
     printf '\t - inside: wcd <name>                e.g. wcd m   (maps m -> current dir)\n'
     [ -s "$alfile" ] && { printf '\n\t - current %s aliases:\n' "$name"; grep '^alias ' "$alfile" | sed 's/^/       /'; }
+
+    # created from inside a profile: the entry command is only registered in
+    # THIS shell (the base shell never saw it), so say so explicitly
+    if [ -n "${WE_ROOT_SID-}" ]; then
+        printf '\t - note: created inside profile %s, so %s is only available in this shell.\n' "${WE_PROFILE-}" "$name"
+        printf '\t   exit to the base shell (or re-source $WE_DIR/we) to use %s there.\n' "$name"
+    fi
+
     printf '\n'
     return 0
 }
@@ -436,6 +444,12 @@ _we_del() {
     fi
     if [ ! -f "$WE_DIR/we_$name" ] && [ ! -f "$WE_DIR/we_${name}_alias" ]; then
         printf 'we: no such profile: %s\n' "$name" >&2
+        return 1
+    fi
+    # refuse to delete the profile we are currently inside: the session would
+    # keep running and re-create the alias file on exit
+    if [ -n "${WE_PROFILE-}" ] && [ "$WE_PROFILE" = "$name" ]; then
+        printf 'we: cannot delete %s: you are currently inside it. Exit first.\n' "$name" >&2
         return 1
     fi
     printf 'we: delete profile %s and its aliases? [y/N] ' "$name"

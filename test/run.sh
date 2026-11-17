@@ -282,7 +282,7 @@ ok "swt restored base dir"         "clean | grep -q \"swt_pwd=$SANDBOX\$\""
 ok "swf alias persisted pre-switch" "grep -q \"^alias swfonly='echo swfonly'\" '$SANDBOX/.we/we_swf_alias'"
 ok "swt alias persisted"           "grep -q \"^alias swtonly='echo swtonly'\" '$SANDBOX/.we/we_swt_alias'"
 ok "swt file has no swfonly"       "! grep -q swfonly '$SANDBOX/.we/we_swt_alias'"
-ok "state clean after switch"      "[ -z \"$(ls -A '$SANDBOX/.we/state' 2>/dev/null | grep -v '^root_')\" ]"
+ok "state clean after switch"      '[ -z "$(ls -A "$SANDBOX/.we/state" 2>/dev/null | grep -v "^root_")" ]'
 
 # --- T9: root snapshot cleanup on base-shell exit ---------------------------
 # The base shell's EXIT trap removes its root_* files, so the state dir is
@@ -296,7 +296,119 @@ section "T9 root cleanup on base exit"
     we rcprof >/dev/null 2>&1
     rcprof
 ) < /dev/null > "$CAPTURE" 2>&1
-ok "state empty after base exit" "[ -z \"$(ls -A '$SANDBOX/.we/state' 2>/dev/null)\" ]"
+ok "state empty after base exit" '[ -z "$(ls -A "$SANDBOX/.we/state" 2>/dev/null)" ]'
+
+# --- T10: same-profile switch (foo -> foo) ----------------------------------
+# Switching to the profile you are already in gives a fresh session with base
+# state and the profile's persisted aliases -- no alias doubling.
+section "T10 same-profile switch"
+cat > "$SANDBOX/t10_inner.sh" <<'EOF'
+walias keepme 'echo keepme'
+echo "s1_keepme=$(type -t keepme)"
+foo10
+echo "s2_keepme=$(type -t keepme)"
+echo "s2_baseal=$(type -t baseal)"
+EOF
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    alias baseal='echo baseal'
+    we foo10 >/dev/null 2>&1
+    foo10
+) < "$SANDBOX/t10_inner.sh" > "$CAPTURE" 2>&1
+ok "s1 has keepme"             'clean | grep -q "s1_keepme=alias"'
+ok "s2 has keepme (persisted)" 'clean | grep -q "s2_keepme=alias"'
+ok "s2 has base alias"         'clean | grep -q "s2_baseal=alias"'
+ok "no alias doubling"         '[ "$(grep -c "^alias keepme=" "$SANDBOX/.we/we_foo10_alias")" = 1 ]'
+
+# --- T11: root snapshot deleted -> switch refused ---------------------------
+# With the base snapshot gone, a switch is refused and the user stays in the
+# current profile (no exec).
+section "T11 root snapshot deleted"
+cat > "$SANDBOX/t11_inner.sh" <<'EOF'
+rm -f "$WE_DIR"/state/root_*.vars "$WE_DIR"/state/root_*.funcs \
+      "$WE_DIR"/state/root_*.aliases "$WE_DIR"/state/root_*.shopt "$WE_DIR"/state/root_*.cwd
+bar11
+echo "still_in=$WE_PROFILE"
+EOF
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    we foo11 >/dev/null 2>&1
+    we bar11 >/dev/null 2>&1
+    foo11
+) < "$SANDBOX/t11_inner.sh" > "$CAPTURE" 2>&1
+ok "switch refused (no root)"  'clean | grep -q "cannot switch to bar11"'
+ok "stayed in foo11"           'clean | grep -q "still_in=foo11"'
+
+# --- T12: profile creation inside a profile ---------------------------------
+# Creating a profile from inside another profile works, but the entry command
+# is only registered in this shell, so a warning is shown.
+section "T12 create inside profile"
+cat > "$SANDBOX/t12_inner.sh" <<'EOF'
+we bar12
+echo "bar12_func=$(type -t bar12)"
+EOF
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    we foo12 >/dev/null 2>&1
+    foo12
+) < "$SANDBOX/t12_inner.sh" > "$CAPTURE" 2>&1
+ok "bar12 files created"       '[ -f "$SANDBOX/.we/we_bar12" ]'
+ok "bar12 func registered here" 'clean | grep -q "bar12_func=function"'
+ok "warning shown"             'clean | grep -q "only available in this shell"'
+
+# --- T13: long switch chain (generation counter) ----------------------------
+# Each switch bumps the generation so session files stay unique; the chain
+# ends with a clean state dir.
+section "T13 long switch chain"
+cat > "$SANDBOX/t13_inner.sh" <<'EOF'
+echo "gen_a=$WE_SESSION_GEN"
+b13
+echo "gen_b=$WE_SESSION_GEN"
+c13
+echo "gen_c=$WE_SESSION_GEN"
+d13
+echo "gen_d=$WE_SESSION_GEN"
+EOF
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    we a13 >/dev/null 2>&1; we b13 >/dev/null 2>&1
+    we c13 >/dev/null 2>&1; we d13 >/dev/null 2>&1
+    a13
+) < "$SANDBOX/t13_inner.sh" > "$CAPTURE" 2>&1
+ok "gen a=1"                   'clean | grep -q "gen_a=1"'
+ok "gen b=2"                   'clean | grep -q "gen_b=2"'
+ok "gen c=3"                   'clean | grep -q "gen_c=3"'
+ok "gen d=4"                   'clean | grep -q "gen_d=4"'
+ok "state clean after chain"   '[ -z "$(ls -A "$SANDBOX/.we/state" 2>/dev/null | grep -v "^root_")" ]'
+
+# --- T14: refuse to delete the current profile ------------------------------
+section "T14 del current profile guard"
+cat > "$SANDBOX/t14_inner.sh" <<'EOF'
+we del foo14
+echo "foo14_file=$([ -f "$WE_DIR/we_foo14" ] && echo present || echo gone)"
+EOF
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    we foo14 >/dev/null 2>&1
+    foo14
+) < "$SANDBOX/t14_inner.sh" > "$CAPTURE" 2>&1
+ok "del refused (current)"     'clean | grep -q "cannot delete foo14"'
+ok "foo14 file still present"  'clean | grep -q "foo14_file=present"'
 
 # ============================================================================
 printf '\n========================================\n'
