@@ -44,6 +44,23 @@ we del foo             # delete foo
   shell in place via `unalias -a`).
 * The prompt inside a profile shows `we:<name>`.
 
+## Switching profiles (replace, not nest)
+
+Typing a profile name **from inside another profile** switches to it in
+*replace* style:
+
+* The outgoing profile's session aliases are persisted first.
+* The new profile restores the **base** shell state (the snapshot taken at
+  first entry), *not* the outgoing profile's state. So `foo -> bar` gives you
+  a clean `bar` with your base environment, and `bar`'s `exit` returns to the
+  base shell (not back to `foo`).
+* The switch is an `exec`: the same process becomes the new profile, so the
+  nesting depth stays at one and the base shell's `wait` is unaffected.
+* The new profile starts in the base working directory.
+
+If the base snapshot is missing (e.g. it was cleaned up), the switch is
+refused with a message; `exit` to the base shell and re-enter instead.
+
 ## Commands inside a profile
 
 | command | effect |

@@ -185,4 +185,21 @@ _we_profile_exit_save() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# _we_session_cleanup <profile> <sess_sid>
+#   Remove this session's transient files (rcfile + pre/cur baseline). Called
+#   from the profile subshell's EXIT trap so every session cleans up after
+#   itself -- including the last profile in a switch chain, whose files the
+#   original parent we_enter cannot know about. The root snapshot is never
+#   touched here.
+# ---------------------------------------------------------------------------
+_we_session_cleanup() {
+    local prof=${1-} sid=${2-}
+    [ -n "$prof" ] && [ -n "$sid" ] || return 0
+    rm -f -- "$WE_DIR/state/rc_${prof}_${sid}" \
+            "$WE_DIR/state/${sid}.pre" \
+            "$WE_DIR/state/${sid}.cur" 2>/dev/null
+    return 0
+}
+
 return 0 2>/dev/null || true

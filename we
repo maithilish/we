@@ -100,7 +100,7 @@ _we_register_all_profiles() {
 # ---------------------------------------------------------------------------
 we_enter() {
     local prof=${1-}
-    local rc root_sid sess_sid
+    local rc root_sid sess_sid gen
     if [ -z "$prof" ]; then
         printf 'we: internal error: we_enter called without profile name\n' >&2
         return 1
@@ -111,15 +111,26 @@ we_enter() {
     }
     [ -f "$WE_DIR/we_${prof}_alias" ] || : > "$WE_DIR/we_${prof}_alias"
 
+    # --- SWITCH: entered from inside a profile ------------------------------
+    # WE_ROOT_SID is set only in profile shells (the base shell never has it).
+    # Restore the BASE (root) state, persist the current profile, and exec into
+    # the new one. _we_switch does not return on success (it execs); a return
+    # here means it failed (e.g. the root snapshot is missing).
+    if [ -n "${WE_ROOT_SID-}" ]; then
+        _we_switch "$prof"
+        return 1
+    fi
+
     # --- first entry: capture the base shell as a durable root snapshot ------
     # The snapshot is keyed to the base shell (root_sid) and is what every
     # profile in this lineage restores from, so a profile entered later from
-    # inside another profile (Phase 2) gets the BASE state, not the
-    # intermediate profile's. The base shell's PID is constant for its
-    # lifetime, so re-entry from the same base shell refreshes the same root
-    # files instead of accumulating new ones.
+    # inside another profile gets the BASE state, not the intermediate
+    # profile's. The base shell's PID is constant for its lifetime, so
+    # re-entry from the same base shell refreshes the same root files instead
+    # of accumulating new ones.
     root_sid="${BASHPID}_$$"
-    sess_sid="$root_sid"
+    gen=1
+    sess_sid="${root_sid}_g${gen}"
 
     # shell options: functions may contain extglob patterns which are a
     # syntax error to parse with extglob off, so the child restores the
@@ -142,7 +153,7 @@ we_enter() {
 
     # --- render the profile rcfile ------------------------------------------
     rc="$WE_DIR/state/rc_${prof}_${sess_sid}"
-    _we_render_rc "$prof" "$root_sid" "$sess_sid" "$rc" || return 1
+    _we_render_rc "$prof" "$root_sid" "$sess_sid" "$gen" "$rc" || return 1
 
     # --- start the profile subshell ------------------------------------------
     # stdin is a terminal -> normal interactive child bash
@@ -154,10 +165,58 @@ we_enter() {
         bash --rcfile "$rc" -i
     fi
 
-    # child is back; its EXIT trap has already persisted profile aliases.
-    # Remove this session's files only; the root snapshot stays for re-entry.
+    # child is back. Its EXIT trap has already persisted profile aliases and
+    # removed this session's files; the rm below is a fallback for the case
+    # the child died without running its trap (e.g. SIGKILL). The root
+    # snapshot stays for re-entry.
     rm -f -- "$rc" "$WE_DIR/state/${sess_sid}.pre" "$WE_DIR/state/${sess_sid}.cur" 2>/dev/null
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# _we_switch <profile>
+#   Called from we_enter when WE_ROOT_SID is set (i.e. we are inside a
+#   profile). Persists the current profile's session aliases, cleans up its
+#   session files, renders a fresh rcfile that restores the BASE (root)
+#   snapshot, and execs into the new profile. Does not return on success.
+# ---------------------------------------------------------------------------
+_we_switch() {
+    local prof=$1
+    local root_sid gen sess_sid rc f missing=0
+    root_sid="$WE_ROOT_SID"
+
+    # the root snapshot must be present to switch from
+    for f in vars funcs aliases shopt cwd; do
+        [ -f "$WE_DIR/state/root_${root_sid}.${f}" ] || missing=1
+    done
+    if [ "$missing" -eq 1 ]; then
+        printf 'we: cannot switch to %s: the base snapshot is missing.\n' "$prof" >&2
+        printf 'we: exit to the base shell first, then enter %s.\n' "$prof" >&2
+        return 1
+    fi
+
+    # persist the current profile's session aliases before it is destroyed
+    _we_profile_exit_save "${WE_PROFILE-}" "${WE_SESSION_SID-}" 2>/dev/null
+
+    # clean up the current session's files (this process is about to exec)
+    rm -f -- "$WE_DIR/state/${WE_SESSION_SID-}.pre" \
+            "$WE_DIR/state/${WE_SESSION_SID-}.cur" \
+            "$WE_DIR/state/rc_${WE_PROFILE-}_${WE_SESSION_SID-}" 2>/dev/null
+
+    # new session identity: same root, next generation (exec preserves the
+    # PID, so the generation is what keeps session files unique)
+    gen=$(( ${WE_SESSION_GEN:-1} + 1 ))
+    sess_sid="${root_sid}_g${gen}"
+
+    rc="$WE_DIR/state/rc_${prof}_${sess_sid}"
+    _we_render_rc "$prof" "$root_sid" "$sess_sid" "$gen" "$rc" || return 1
+
+    # become the new profile (does not return)
+    if [ -t 0 ]; then
+        exec bash --rcfile "$rc"
+    else
+        exec bash --rcfile "$rc" -i
+    fi
 }
 
 # ---------------------------------------------------------------------------
@@ -195,21 +254,23 @@ _we_snapshot_vars() {
 }
 
 # ---------------------------------------------------------------------------
-# _we_render_rc <profile> <sid> <rcfile>
+# _we_render_rc <profile> <root_sid> <sess_sid> <gen> <rcfile>
 # ---------------------------------------------------------------------------
 _we_render_rc() {
-    local prof=$1 root_sid=$2 sess_sid=$3 rc=$4
+    local prof=$1 root_sid=$2 sess_sid=$3 gen=$4 rc=$5
     cat > "$rc" <<WE_RC_EOF
 # we: rcfile for profile '$prof' (generated, do not edit)
 shopt -s expand_aliases
 WE_DIR='$WE_DIR'
 WE_PROFILE='$prof'
 export WE_PROFILE
-# lineage markers: the root snapshot this shell restores from, and this
-# session's own id (pre/cur baseline files, exit-save)
+# lineage markers: the root snapshot this shell restores from, this session's
+# own id (pre/cur baseline files, exit-save), and the session generation
+# (bumped on each switch so session files stay unique across exec'd sessions)
 WE_ROOT_SID='$root_sid'
 WE_SESSION_SID='$sess_sid'
-export WE_ROOT_SID WE_SESSION_SID
+WE_SESSION_GEN='$gen'
+export WE_ROOT_SID WE_SESSION_SID WE_SESSION_GEN
 
 # 1) inherit base shell state (root snapshot taken at first entry).
 #    extglob is forced on while parsing the snapshots: functions sourced from
@@ -238,8 +299,10 @@ alias > "\$WE_DIR/state/${sess_sid}.pre" 2>/dev/null || : > "\$WE_DIR/state/${se
 # 5) prompt: keep the profile visible
 PS1='\\[\\e[01;36m\\]we:$prof\\[\\e[0m\\] \\w \\$ '
 
-# 6) persist profile-specific aliases when the subshell exits
-trap '_we_profile_exit_save "'"$prof"'" "'"$sess_sid"'"' EXIT
+# 6) on exit: persist profile-specific aliases, then remove this session's
+#    transient files (rc + pre/cur). Each session cleans up after itself, so
+#    the last profile in a switch chain is handled too.
+trap '_we_profile_exit_save "$prof" "$sess_sid"; _we_session_cleanup "$prof" "$sess_sid"' EXIT
 WE_RC_EOF
     return $?
 }
@@ -439,7 +502,7 @@ EOF
 _we_register_all_profiles
 
 # export the interface (and its closure) so child scripts/shells can use it
-export -f we we_enter _we_create _we_list _we_show _we_del _we_help \
+export -f we we_enter _we_switch _we_create _we_list _we_show _we_del _we_help \
            _we_valid_name _we_profiles _we_register_profile \
            _we_register_all_profiles _we_snapshot_vars _we_render_rc 2>/dev/null
 

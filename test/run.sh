@@ -240,6 +240,50 @@ section "T7 delete"
 ok "we del removes files"     'clean | grep -q "del_files=gone"'
 ok "we del unregisters func"  'clean | grep -q "del_func=" '
 
+# --- T8: profile-to-profile switching (replace / exec) -----------------------
+# Entering a profile from inside another profile must restore the BASE state
+# (not the intermediate profile's), persist the outgoing profile first, and
+# start in the base directory.
+section "T8 switch"
+cat > "$SANDBOX/t8_inner.sh" <<'EOF'
+# --- running in swf (switch-from) ---
+echo "swf_baseal=$(type -t baseal)"
+echo "swf_basevar=[$basevar]"
+walias swfonly 'echo swfonly'
+cd "$SANDBOX/x/y/z"
+echo "swf_pwd=$PWD"
+swt
+# --- running in swt (switch-to, after exec) ---
+echo "swt_baseal=$(type -t baseal)"
+echo "swt_basevar=[$basevar]"
+echo "swt_swfonly=$(type -t swfonly)"
+echo "swt_pwd=$PWD"
+walias swtonly 'echo swtonly'
+EOF
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    basevar=basehello
+    alias baseal='echo baseal'
+    we swf >/dev/null 2>&1
+    we swt >/dev/null 2>&1
+    swf
+) < "$SANDBOX/t8_inner.sh" > "$CAPTURE" 2>&1
+
+ok "swf inherited base alias"      'clean | grep -q "swf_baseal=alias"'
+ok "swf inherited base var"        'clean | grep -q "swf_basevar=\[basehello\]"'
+ok "swf cd worked"                 "clean | grep -q \"swf_pwd=$SANDBOX/x/y/z\$\""
+ok "swt inherited base alias"      'clean | grep -q "swt_baseal=alias"'
+ok "swt inherited base var"        'clean | grep -q "swt_basevar=\[basehello\]"'
+ok "swt did NOT inherit swf alias" 'clean | grep -q "swt_swfonly=$"'
+ok "swt restored base dir"         "clean | grep -q \"swt_pwd=$SANDBOX\$\""
+ok "swf alias persisted pre-switch" "grep -q \"^alias swfonly='echo swfonly'\" '$SANDBOX/.we/we_swf_alias'"
+ok "swt alias persisted"           "grep -q \"^alias swtonly='echo swtonly'\" '$SANDBOX/.we/we_swt_alias'"
+ok "swt file has no swfonly"       "! grep -q swfonly '$SANDBOX/.we/we_swt_alias'"
+ok "state clean after switch"      "[ -z \"$(ls -A '$SANDBOX/.we/state' 2>/dev/null | grep -v '^root_')\" ]"
+
 # ============================================================================
 printf '\n========================================\n'
 printf 'TOTAL: pass=%d fail=%d\n' "$PASS" "$FAIL"
