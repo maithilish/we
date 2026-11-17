@@ -13,7 +13,8 @@
 #   $WE_DIR/we_alias            base aliases, active in every shell (optional)
 #   $WE_DIR/we_<name>           profile setup script for profile <name>
 #   $WE_DIR/we_<name>_alias     persisted aliases for profile <name>
-#   $WE_DIR/state/              per-session snapshots / rc files (auto-managed)
+#   $WE_DIR/state/              root snapshots, per-session files, rcfiles
+#                               (auto-managed)
 #
 # Usage:
 #   we              prompt for a profile name and create it
@@ -99,7 +100,7 @@ _we_register_all_profiles() {
 # ---------------------------------------------------------------------------
 we_enter() {
     local prof=${1-}
-    local rc sid
+    local rc root_sid sess_sid
     if [ -z "$prof" ]; then
         printf 'we: internal error: we_enter called without profile name\n' >&2
         return 1
@@ -110,28 +111,38 @@ we_enter() {
     }
     [ -f "$WE_DIR/we_${prof}_alias" ] || : > "$WE_DIR/we_${prof}_alias"
 
-    # unique id for this session (two terminals can run the same profile)
-    sid="${BASHPID}_$$"
+    # --- first entry: capture the base shell as a durable root snapshot ------
+    # The snapshot is keyed to the base shell (root_sid) and is what every
+    # profile in this lineage restores from, so a profile entered later from
+    # inside another profile (Phase 2) gets the BASE state, not the
+    # intermediate profile's. The base shell's PID is constant for its
+    # lifetime, so re-entry from the same base shell refreshes the same root
+    # files instead of accumulating new ones.
+    root_sid="${BASHPID}_$$"
+    sess_sid="$root_sid"
 
-    # --- snapshot parent shell state ---------------------------------------
     # shell options: functions may contain extglob patterns which are a
     # syntax error to parse with extglob off, so the child restores the
     # parent's shopt state (see _we_render_rc).
-    ( shopt -p ) > "$WE_DIR/state/${sid}.shopt" 2>/dev/null || : > "$WE_DIR/state/${sid}.shopt"
+    ( shopt -p ) > "$WE_DIR/state/root_${root_sid}.shopt" 2>/dev/null || : > "$WE_DIR/state/root_${root_sid}.shopt"
 
     # aliases: plain `alias` output is re-sourcing safe
-    ( alias ) > "$WE_DIR/state/${sid}.aliases" 2>/dev/null || : > "$WE_DIR/state/${sid}.aliases"
+    ( alias ) > "$WE_DIR/state/root_${root_sid}.aliases" 2>/dev/null || : > "$WE_DIR/state/root_${root_sid}.aliases"
 
     # functions: `declare -f` output is re-sourcing safe
-    ( declare -f ) > "$WE_DIR/state/${sid}.funcs" 2>/dev/null || : > "$WE_DIR/state/${sid}.funcs"
+    ( declare -f ) > "$WE_DIR/state/root_${root_sid}.funcs" 2>/dev/null || : > "$WE_DIR/state/root_${root_sid}.funcs"
 
     # non-exported, non-readonly variables (exported ones are inherited by the
     # child process automatically; readonly/special vars would error on reset)
-    _we_snapshot_vars > "$WE_DIR/state/${sid}.vars" 2>/dev/null || : > "$WE_DIR/state/${sid}.vars"
+    _we_snapshot_vars > "$WE_DIR/state/root_${root_sid}.vars" 2>/dev/null || : > "$WE_DIR/state/root_${root_sid}.vars"
+
+    # base working directory: PWD is a special var excluded from the vars
+    # snapshot; store a ready-to-source cd line (quoted so spaces survive)
+    printf 'cd %q 2>/dev/null\n' "$PWD" > "$WE_DIR/state/root_${root_sid}.cwd"
 
     # --- render the profile rcfile ------------------------------------------
-    rc="$WE_DIR/state/rc_${prof}_${sid}"
-    _we_render_rc "$prof" "$sid" "$rc" || return 1
+    rc="$WE_DIR/state/rc_${prof}_${sess_sid}"
+    _we_render_rc "$prof" "$root_sid" "$sess_sid" "$rc" || return 1
 
     # --- start the profile subshell ------------------------------------------
     # stdin is a terminal -> normal interactive child bash
@@ -143,8 +154,9 @@ we_enter() {
         bash --rcfile "$rc" -i
     fi
 
-    # child is back; its EXIT trap has already persisted profile aliases
-    rm -f -- "$rc" "$WE_DIR/state/${sid}"* 2>/dev/null
+    # child is back; its EXIT trap has already persisted profile aliases.
+    # Remove this session's files only; the root snapshot stays for re-entry.
+    rm -f -- "$rc" "$WE_DIR/state/${sess_sid}.pre" "$WE_DIR/state/${sess_sid}.cur" 2>/dev/null
     return 0
 }
 
@@ -186,28 +198,35 @@ _we_snapshot_vars() {
 # _we_render_rc <profile> <sid> <rcfile>
 # ---------------------------------------------------------------------------
 _we_render_rc() {
-    local prof=$1 sid=$2 rc=$3
+    local prof=$1 root_sid=$2 sess_sid=$3 rc=$4
     cat > "$rc" <<WE_RC_EOF
 # we: rcfile for profile '$prof' (generated, do not edit)
 shopt -s expand_aliases
 WE_DIR='$WE_DIR'
 WE_PROFILE='$prof'
 export WE_PROFILE
+# lineage markers: the root snapshot this shell restores from, and this
+# session's own id (pre/cur baseline files, exit-save)
+WE_ROOT_SID='$root_sid'
+WE_SESSION_SID='$sess_sid'
+export WE_ROOT_SID WE_SESSION_SID
 
-# 1) inherit parent shell state (snapshot taken at entry time).
+# 1) inherit base shell state (root snapshot taken at first entry).
 #    extglob is forced on while parsing the snapshots: functions sourced from
 #    the parent may contain extglob patterns (e.g. bash-completion), which
 #    are a syntax error to parse with extglob off. The parent's exact shopt
 #    state is restored right afterwards, so interactive behaviour matches.
 shopt -s extglob
-[ -f "$WE_DIR/state/${sid}.vars" ]     && . "$WE_DIR/state/${sid}.vars"
-[ -f "$WE_DIR/state/${sid}.funcs" ]    && . "$WE_DIR/state/${sid}.funcs"
-[ -f "$WE_DIR/state/${sid}.aliases" ]  && . "$WE_DIR/state/${sid}.aliases"
-[ -f "$WE_DIR/state/${sid}.shopt" ]    && . "$WE_DIR/state/${sid}.shopt"
+[ -f "$WE_DIR/state/root_${root_sid}.vars" ]     && . "$WE_DIR/state/root_${root_sid}.vars"
+[ -f "$WE_DIR/state/root_${root_sid}.funcs" ]    && . "$WE_DIR/state/root_${root_sid}.funcs"
+[ -f "$WE_DIR/state/root_${root_sid}.aliases" ]  && . "$WE_DIR/state/root_${root_sid}.aliases"
+[ -f "$WE_DIR/state/root_${root_sid}.shopt" ]    && . "$WE_DIR/state/root_${root_sid}.shopt"
+# restore the base working directory (PWD is a special var, stored separately)
+[ -f "$WE_DIR/state/root_${root_sid}.cwd" ]      && . "$WE_DIR/state/root_${root_sid}.cwd"
 
 # 2) baseline of aliases before profile-specific ones: used on exit to
 #    persist only what belongs to this profile
-alias > "\$WE_DIR/state/${sid}.pre" 2>/dev/null || : > "\$WE_DIR/state/${sid}.pre"
+alias > "\$WE_DIR/state/${sess_sid}.pre" 2>/dev/null || : > "\$WE_DIR/state/${sess_sid}.pre"
 
 # 3) profile setup, then profile aliases (profile wins over parent on conflict)
 [ -f "\$WE_DIR/we_$prof" ]          && . "\$WE_DIR/we_$prof"
@@ -220,7 +239,7 @@ alias > "\$WE_DIR/state/${sid}.pre" 2>/dev/null || : > "\$WE_DIR/state/${sid}.pr
 PS1='\\[\\e[01;36m\\]we:$prof\\[\\e[0m\\] \\w \\$ '
 
 # 6) persist profile-specific aliases when the subshell exits
-trap '_we_profile_exit_save "'"$prof"'" "'"$sid"'"' EXIT
+trap '_we_profile_exit_save "'"$prof"'" "'"$sess_sid"'"' EXIT
 WE_RC_EOF
     return $?
 }

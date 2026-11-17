@@ -16,6 +16,9 @@
 set -u
 # the harness embeds an extglob pattern (T4); parse it like a real shell does
 shopt -s extglob 2>/dev/null || true
+# start from a clean base: drop any lineage markers inherited from the
+# surrounding environment so the "base shell" subshells are truly base
+unset WE_ROOT_SID WE_SESSION_SID WE_PROFILE 2>/dev/null || true
 
 REPO=$(cd -- "$(dirname -- "$0")/.." && pwd)
 SANDBOX=${WE_TEST_SANDBOX:-/tmp/we_sandbox}
@@ -216,8 +219,12 @@ ok "wcd with spaces persisted" "grep -q \"^alias sp='cd\" '$SANDBOX/.we/we_foo5_
 ok "wcd spaces value correct"  "grep -qF \"dir with space\" '$SANDBOX/.we/we_foo5_alias'"
 
 # --- T6: state/ cleanup after exit -------------------------------------------
+# Phase 1+: root snapshots persist after exit (kept for re-entry / Phase 2
+# switching); per-session files (rc, pre, cur) must be gone.
 section "T6 state cleanup"
-ok "state dir empty after all entries" '[ -z "$(ls -A "$SANDBOX/.we/state" 2>/dev/null)" ]'
+ok "no session rc files left"      '[ -z "$(ls "$SANDBOX/.we/state"/rc_* 2>/dev/null)" ]'
+ok "no session pre/cur files left" '[ -z "$(ls "$SANDBOX/.we/state"/*.pre "$SANDBOX/.we/state"/*.cur 2>/dev/null)" ]'
+ok "only root_* files remain"      '[ -z "$(ls -A "$SANDBOX/.we/state" 2>/dev/null | grep -v "^root_")" ]'
 
 # --- T7: we del ---------------------------------------------------------------
 section "T7 delete"
