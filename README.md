@@ -73,6 +73,43 @@ refused with a message; `exit` to the base shell and re-enter instead.
 `walias`/`wcd` are also available in the **base** shell; there they persist
 to the base alias file `~/.we/we_alias` instead.
 
+## Base aliases are universal
+
+A `walias` set in the **base** shell is inherited by *every* profile and
+survives profile-to-profile switches:
+
+```
+$ walias n nano        # in the base shell
+$ foo                  # enter foo
+$ type n               # alias n='nano'   (inherited)
+$ bar                  # switch to bar
+$ type n               # alias n='nano'   (still inherited)
+```
+
+How it works: on every first entry from the base shell, `we` snapshots the
+base shell's full alias table into a root snapshot; every profile (and every
+switch) restores from that snapshot. So base aliases flow into all profiles
+automatically. Consequences:
+
+* A base alias is persisted to `~/.we/we_alias` and is **not** copied into
+  any profile's `we_<name>_alias` (the profile's exit-save skips names that
+  already came from the base).
+* Change a base alias and re-enter a profile, and the profile sees the new
+  value (the snapshot is re-taken on each entry from the base).
+
+### Shadowing a base alias from a profile
+
+A profile may define an alias with the same name as a base alias. What
+persists depends on how you define it:
+
+| method in the profile | effect |
+|---|---|
+| `walias n '<cmd>'` | the shadow **persists** for that profile and wins on re-entry (a per-profile override of the base value) |
+| `alias n='<cmd>'` | the shadow is **session-only**; the base value is restored on re-entry |
+
+The base value in `~/.we/we_alias` is never modified by a profile shadow, so
+other profiles that don't shadow it keep seeing the base value.
+
 ## Files
 
 | file | purpose |

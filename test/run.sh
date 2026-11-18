@@ -410,6 +410,98 @@ EOF
 ok "del refused (current)"     'clean | grep -q "cannot delete foo14"'
 ok "foo14 file still present"  'clean | grep -q "foo14_file=present"'
 
+# --- T15: universal base walias (A0) ----------------------------------------
+# A base `walias` is universal: inherited by every profile, survives a
+# profile-to-profile switch, is persisted to the base alias file (we_alias),
+# and is NOT duplicated into any profile's own alias file.
+section "T15 universal base walias"
+cat > "$SANDBOX/t15_inner.sh" <<'EOF'
+# --- in foo15 ---
+echo "f15_n=$(type -t n)"
+bar15
+# --- in bar15 (after switch) ---
+echo "b15_n=$(type -t n)"
+EOF
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    walias n nano >/dev/null
+    we foo15 >/dev/null 2>&1
+    we bar15 >/dev/null 2>&1
+    foo15
+) < "$SANDBOX/t15_inner.sh" > "$CAPTURE" 2>&1
+ok "foo15 inherited base walias"  'clean | grep -q "f15_n=alias"'
+ok "bar15 inherited base walias"  'clean | grep -q "b15_n=alias"'
+ok "persisted to base we_alias"   "grep -q \"^alias n='nano'\" '$SANDBOX/.we/we_alias'"
+ok "not duplicated into foo15"    '! grep -q "^alias n=" "$SANDBOX/.we/we_foo15_alias"'
+ok "not duplicated into bar15"    '! grep -q "^alias n=" "$SANDBOX/.we/we_bar15_alias"'
+
+# --- T16: base alias change seen on re-entry (A0) ---------------------------
+# The root snapshot is re-taken on every first entry from the base, so a base
+# alias changed between two entries is seen at its new value on re-entry.
+section "T16 base alias change on re-entry"
+cat > "$SANDBOX/t16_in1.sh" <<'EOF'
+[ "$(alias n 2>/dev/null)" = "alias n='nano'" ] && echo "r1=nano" || echo "r1=OTHER"
+EOF
+cat > "$SANDBOX/t16_in2.sh" <<'EOF'
+[ "$(alias n 2>/dev/null)" = "alias n='vim'" ] && echo "r2=vim" || echo "r2=OTHER"
+EOF
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    walias n nano >/dev/null
+    we reprof >/dev/null 2>&1
+    reprof < "$SANDBOX/t16_in1.sh"
+    walias n vim >/dev/null
+    reprof < "$SANDBOX/t16_in2.sh"
+) > "$CAPTURE" 2>&1
+ok "first entry sees nano" 'clean | grep -q "r1=nano"'
+ok "second entry sees vim" 'clean | grep -q "r2=vim"'
+
+# --- T17: profile override of a base alias (A0, lock current behaviour) -----
+# A profile may shadow a base alias. Persistence depends on the method:
+#   - `walias` in the profile persists the shadow (per-profile; wins on re-entry)
+#   - plain `alias` in the profile is session-only (base value restored on re-entry)
+# This locks the current behaviour so it is not changed accidentally.
+section "T17 profile override of base alias"
+cat > "$SANDBOX/t17_w1.sh" <<'EOF'
+walias ov 'echo profile-ov' >/dev/null
+[ "$(alias ov 2>/dev/null)" = "alias ov='echo profile-ov'" ] && echo "w1=profile" || echo "w1=OTHER"
+EOF
+cat > "$SANDBOX/t17_w2.sh" <<'EOF'
+[ "$(alias ov 2>/dev/null)" = "alias ov='echo profile-ov'" ] && echo "w2=profile" || echo "w2=OTHER"
+EOF
+cat > "$SANDBOX/t17_a1.sh" <<'EOF'
+alias ov2='echo profile-ov2'
+[ "$(alias ov2 2>/dev/null)" = "alias ov2='echo profile-ov2'" ] && echo "a1=profile" || echo "a1=OTHER"
+EOF
+cat > "$SANDBOX/t17_a2.sh" <<'EOF'
+[ "$(alias ov2 2>/dev/null)" = "alias ov2='echo base-ov2'" ] && echo "a2=base" || echo "a2=OTHER"
+EOF
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    walias ov 'echo base-ov' >/dev/null
+    walias ov2 'echo base-ov2' >/dev/null
+    we ovprof >/dev/null 2>&1
+    ovprof < "$SANDBOX/t17_w1.sh"
+    ovprof < "$SANDBOX/t17_w2.sh"
+    ovprof < "$SANDBOX/t17_a1.sh"
+    ovprof < "$SANDBOX/t17_a2.sh"
+) > "$CAPTURE" 2>&1
+ok "walias shadow active in session"   'clean | grep -q "w1=profile"'
+ok "walias shadow persists (re-entry)" 'clean | grep -q "w2=profile"'
+ok "walias shadow in profile file"     "grep -q \"^alias ov='echo profile-ov'\" '$SANDBOX/.we/we_ovprof_alias'"
+ok "plain alias shadow active in session" 'clean | grep -q "a1=profile"'
+ok "plain alias shadow NOT persisted"    'clean | grep -q "a2=base"'
+ok "plain alias shadow not in file"      '! grep -q "profile-ov2" "$SANDBOX/.we/we_ovprof_alias"'
+
 # ============================================================================
 printf '\n========================================\n'
 printf 'TOTAL: pass=%d fail=%d\n' "$PASS" "$FAIL"
