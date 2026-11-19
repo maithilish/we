@@ -67,11 +67,12 @@ refused with a message; `exit` to the base shell and re-enter instead.
 |---|---|
 | `walias <name> <value>` | create alias + persist it (value may be a multi-command string in quotes) |
 | `wcd <name>` | alias `<name>` -> `cd <current dir>` (spaces-safe) |
+| `wfunc <name> <body>` | define a function + persist it (body is the function body, quoted; multi-line ok) |
 | `alias <name>='<cmd>'` | plain aliases are persisted on exit too |
 | `exit` | leave the profile; persists aliases |
 
-`walias`/`wcd` are also available in the **base** shell; there they persist
-to the base alias file `~/.we/we_alias` instead.
+`walias`/`wcd`/`wfunc` are also available in the **base** shell; there they
+persist to the base files `~/.we/we_alias` and `~/.we/we_func` instead.
 
 ## Base aliases are universal
 
@@ -110,15 +111,43 @@ persists depends on how you define it:
 The base value in `~/.we/we_alias` is never modified by a profile shadow, so
 other profiles that don't shadow it keep seeing the base value.
 
+## Functions (wfunc)
+
+`wfunc` defines a function in the current shell and persists it, so it
+survives re-entry and (for base functions) is available everywhere:
+
+```
+$ wfunc hi 'echo "hello $1"'      # in a profile: persisted to we_<prof>_func
+$ hi there                        # hello there
+$ wfunc hi 'echo "hi $1 (v2)"'    # redefining upserts (replaces the old block)
+```
+
+* **Profile functions** persist to `~/.we/we_<name>_func` and are available
+  only in that profile (isolated from other profiles). They override any
+  base/root function with the same name.
+* **Base functions** (a `wfunc` in the base shell) persist to
+  `~/.we/we_func` and are inherited by *every* profile, exactly like base
+  aliases (see above). They are re-sourced in each new base shell, so they
+  persist across sessions.
+* The stored form is the canonical `declare -f` output, so it is re-source
+  safe (quoting, arrays, and attributes are preserved).
+* **Name collision with a profile:** a function has the same name as a
+  profile (e.g. `wfunc foo '...'`). Bash gives functions precedence over
+  commands, so `foo` would call the function instead of entering the profile.
+  `wfunc` warns about this at definition time. (This is the same precedence
+  rule that lets a profile shadow a base alias.)
+
 ## Files
 
 | file | purpose |
 |---|---|
 | `~/.we/we` | main script, sourced at login |
-| `~/.we/funcs.sh` | `walias`/`wcd` + persistence helpers |
+| `~/.we/funcs.sh` | `walias`/`wcd`/`wfunc` + persistence helpers |
 | `~/.we/we_alias` | base aliases for every shell (optional) |
+| `~/.we/we_func` | base functions for every shell (optional) |
 | `~/.we/we_<name>` | profile setup script (cd, echo, venv activation, ...) |
 | `~/.we/we_<name>_alias` | persisted aliases of profile `<name>` |
+| `~/.we/we_<name>_func` | persisted functions of profile `<name>` |
 | `~/.we/state/` | per-session snapshots & rcfiles (auto-cleaned, don't edit) |
 | `~/.we.bak.<ts>` | backup made by install.sh when upgrading |
 

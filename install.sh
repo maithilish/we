@@ -97,7 +97,8 @@ if [ -d "$TARGET" ]; then
         b=${f##*/}
         b=${b#we_}
         [ "$b" = alias ] && continue
-        case $b in *_alias) continue;; esac
+        [ "$b" = func ] && continue
+        case $b in *_alias|*_func) continue;; esac
         migrate_profile "$b"
     done
 fi

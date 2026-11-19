@@ -502,6 +502,127 @@ ok "plain alias shadow active in session" 'clean | grep -q "a1=profile"'
 ok "plain alias shadow NOT persisted"    'clean | grep -q "a2=base"'
 ok "plain alias shadow not in file"      '! grep -q "profile-ov2" "$SANDBOX/.we/we_ovprof_alias"'
 
+# --- T18: wfunc in a profile (A1) -------------------------------------------
+# wfunc defines a function in the session and persists it to we_<prof>_func;
+# it survives re-entry; redefining upserts (replaces the old block).
+section "T18 wfunc in a profile"
+cat > "$SANDBOX/t18_in1.sh" <<'EOF'
+wfunc greet 'echo "hello $1"' >/dev/null
+echo "r1=$(greet world)"
+EOF
+cat > "$SANDBOX/t18_in2.sh" <<'EOF'
+echo "r2=$(greet again)"
+EOF
+cat > "$SANDBOX/t18_in3.sh" <<'EOF'
+wfunc greet 'echo "hi $1 (v2)"' >/dev/null
+echo "r3=$(greet upsert)"
+EOF
+enter f18 "$SANDBOX/t18_in1.sh"
+ok "wfunc defined in session"  'clean | grep -q "r1=hello world"'
+enter f18 "$SANDBOX/t18_in2.sh"
+ok "wfunc persists (re-entry)" 'clean | grep -q "r2=hello again"'
+enter f18 "$SANDBOX/t18_in3.sh"
+ok "wfunc upsert (re-entry)"   'clean | grep -q "r3=hi upsert (v2)"'
+ok "wfunc in profile file"     "grep -q 'greet ()' '$SANDBOX/.we/we_f18_func'"
+ok "upsert replaced old block" "! grep -q 'hello' '$SANDBOX/.we/we_f18_func'"
+
+# --- T19: base wfunc (A1) ----------------------------------------------------
+# A base wfunc is universal: inherited by every profile, survives a switch,
+# persisted to we_func, and NOT duplicated into any profile's func file.
+section "T19 base wfunc"
+cat > "$SANDBOX/t19_in.sh" <<'EOF'
+echo "f19=$(basefn)"
+bar19
+echo "b19=$(basefn)"
+EOF
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    wfunc basefn 'echo BASE-FUNC' >/dev/null
+    we foo19 >/dev/null 2>&1
+    we bar19 >/dev/null 2>&1
+    foo19
+) < "$SANDBOX/t19_in.sh" > "$CAPTURE" 2>&1
+ok "foo19 inherited base wfunc"  'clean | grep -q "f19=BASE-FUNC"'
+ok "bar19 inherited base wfunc"  'clean | grep -q "b19=BASE-FUNC"'
+ok "persisted to base we_func"   "grep -q 'basefn ()' '$SANDBOX/.we/we_func'"
+ok "not duplicated into foo19"   "! grep -q 'basefn' '$SANDBOX/.we/we_foo19_func'"
+ok "not duplicated into bar19"   "! grep -q 'basefn' '$SANDBOX/.we/we_bar19_func'"
+# a fresh base shell (new session) re-sources we_func, so the base func is
+# still available without re-defining it
+cat > "$SANDBOX/t19_base.sh" <<'EOF'
+echo "base19=$(basefn)"
+EOF
+parent_shell "$SANDBOX/t19_base.sh"
+ok "base wfunc persists across sessions" 'clean | grep -q "base19=BASE-FUNC"'
+
+# --- T20: per-profile isolation + multi-line body (A1) -----------------------
+# A profile's wfunc is isolated to that profile (not visible in another);
+# multi-line bodies are supported and re-source correctly.
+section "T20 per-profile isolation + multi-line"
+cat > "$SANDBOX/t20_in1.sh" <<'EOF'
+wfunc onlyp1 'echo "p1-only $1"' >/dev/null
+wfunc multi '
+echo "line1 $1"
+echo "line2"
+' >/dev/null
+echo "p1_only=$(onlyp1 x)"
+multi m
+EOF
+cat > "$SANDBOX/t20_in2.sh" <<'EOF'
+echo "p2_only=$(onlyp1 2>&1 | head -1)"
+EOF
+cat > "$SANDBOX/t20_in3.sh" <<'EOF'
+multi m
+EOF
+enter f20a "$SANDBOX/t20_in1.sh"
+ok "p1 has its own func"      'clean | grep -q "p1_only=p1-only x"'
+ok "multi-line body line1"    'clean | grep -q "line1 m"'
+ok "multi-line body line2"    'clean | grep -q "line2"'
+enter f20a "$SANDBOX/t20_in3.sh"
+ok "multi-line persists (re-entry)" 'clean | grep -q "line1 m"'
+enter f20b "$SANDBOX/t20_in2.sh"
+ok "p2 does NOT have p1's func" 'clean | grep -q "p2_only=onlyp1: command not found"'
+ok "p1 func in f20a file"     "grep -q 'onlyp1 ()' '$SANDBOX/.we/we_f20a_func'"
+ok "p1 func NOT in f20b file" "! grep -q 'onlyp1' '$SANDBOX/.we/we_f20b_func'"
+
+# --- T21: wfunc name validation + profile collision (A1) ---------------------
+# wfunc rejects names that are not valid shell identifiers, and warns when the
+# name matches an existing profile (the function would shadow the entry cmd).
+section "T21 wfunc name validation + collision"
+# write results to a file (not the capture): the interactive shell echoes the
+# command line, which would contain the markers and make grep vacuous
+cat > "$SANDBOX/t21_in.sh" <<'EOF'
+{
+wfunc 'bad-name' 'echo x' 2>&1 | grep -q 'invalid' && echo "v1=invalid" || echo "v1=OTHER"
+wfunc '9bad' 'echo x' 2>&1 | grep -q 'invalid' && echo "v2=invalid" || echo "v2=OTHER"
+wfunc ok_name 'echo x' >/dev/null
+echo "v3=$(type -t ok_name)"
+wfunc f21 'echo shadow' 2>&1 | grep -q 'shadows' && echo "v4=warn" || echo "v4=OTHER"
+} > t21_out.txt 2>&1
+EOF
+enter f21 "$SANDBOX/t21_in.sh"
+ok "rejects bad-name"          'grep -q "v1=invalid" "$SANDBOX/t21_out.txt"'
+ok "rejects 9bad"              'grep -q "v2=invalid" "$SANDBOX/t21_out.txt"'
+ok "accepts ok_name"           'grep -q "v3=function" "$SANDBOX/t21_out.txt"'
+ok "warns on profile collision" 'grep -q "v4=warn" "$SANDBOX/t21_out.txt"'
+
+# --- T22: profile listing excludes func files (A1) ---------------------------
+# we_func (base) and we_<prof>_func (profile) must NOT be listed as profiles
+# by `we ls` / _we_profiles (only we_<name> setup files are profiles).
+section "T22 profile listing excludes func files"
+# write `we ls` to a file (not the capture): the interactive shell echoes the
+# command line, which would contain the test markers and make grep vacuous
+cat > "$SANDBOX/t22_in.sh" <<'EOF'
+we ls > t22_ls.txt 2>&1
+EOF
+enter f22a "$SANDBOX/t22_in.sh"
+ok "we ls does not list func"       '! grep -q "  func " "$SANDBOX/t22_ls.txt"'
+ok "we ls does not list f22a_func"  '! grep -q "  f22a_func " "$SANDBOX/t22_ls.txt"'
+ok "we ls lists f22a"               'grep -q "  f22a " "$SANDBOX/t22_ls.txt"'
+
 # ============================================================================
 printf '\n========================================\n'
 printf 'TOTAL: pass=%d fail=%d\n' "$PASS" "$FAIL"

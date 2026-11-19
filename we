@@ -11,8 +11,10 @@
 #   $WE_DIR/funcs.sh            profile-shell tools: walias, wcd (sourced here
 #                               and inside every profile subshell)
 #   $WE_DIR/we_alias            base aliases, active in every shell (optional)
+#   $WE_DIR/we_func             base functions, active in every shell (optional)
 #   $WE_DIR/we_<name>           profile setup script for profile <name>
 #   $WE_DIR/we_<name>_alias     persisted aliases for profile <name>
+#   $WE_DIR/we_<name>_func      persisted functions for profile <name>
 #   $WE_DIR/state/              root snapshots, per-session files, rcfiles
 #                               (auto-managed)
 #
@@ -51,6 +53,8 @@ find "$WE_DIR/state" -maxdepth 1 -type f -mmin +1440 -delete 2>/dev/null || :
 
 # base aliases (plain `alias` lines), kept for compatibility with v1
 [ -f "$WE_DIR/we_alias" ] && . "$WE_DIR/we_alias"
+# base functions (declare -f blocks), active in every shell
+[ -f "$WE_DIR/we_func" ] && . "$WE_DIR/we_func"
 
 # --- internal helpers --------------------------------------------------------
 
@@ -63,7 +67,8 @@ _we_valid_name() {
     return 0
 }
 
-# list profile names found in $WE_DIR (files we_<name> without _alias suffix)
+# list profile names found in $WE_DIR (files we_<name> without the _alias / _func
+# suffixes, and not the base we_alias / we_func files)
 _we_profiles() {
     local f b
     for f in "$WE_DIR"/we_*; do
@@ -71,7 +76,9 @@ _we_profiles() {
         b=${f##*/}
         b=${b#we_}
         [[ $b == alias ]] && continue
+        [[ $b == func ]] && continue
         [[ $b == *_alias ]] && continue
+        [[ $b == *_func ]] && continue
         printf '%s\n' "$b"
     done
 }
@@ -293,13 +300,16 @@ alias > "\$WE_DIR/state/${sess_sid}.pre" 2>/dev/null || : > "\$WE_DIR/state/${se
 [ -f "\$WE_DIR/we_$prof" ]          && . "\$WE_DIR/we_$prof"
 [ -f "\$WE_DIR/we_${prof}_alias" ]  && . "\$WE_DIR/we_${prof}_alias"
 
-# 4) profile tools: walias, wcd (persist into we_${prof}_alias)
+# 4) profile functions (persisted via wfunc; override base/root functions)
+[ -f "\$WE_DIR/we_${prof}_func" ]   && . "\$WE_DIR/we_${prof}_func"
+
+# 5) profile tools: walias, wcd, wfunc (persist into we_${prof}_alias / _func)
 [ -f "\$WE_DIR/funcs.sh" ] && . "\$WE_DIR/funcs.sh"
 
-# 5) prompt: keep the profile visible
+# 6) prompt: keep the profile visible
 PS1='\\[\\e[01;36m\\]we:$prof\\[\\e[0m\\] \\w \\$ '
 
-# 6) on exit: persist profile-specific aliases, then remove this session's
+# 7) on exit: persist profile-specific aliases, then remove this session's
 #    transient files (rc + pre/cur). Each session cleans up after itself, so
 #    the last profile in a switch chain is handled too.
 trap '_we_profile_exit_save "$prof" "$sess_sid"; _we_session_cleanup "$prof" "$sess_sid"' EXIT
@@ -367,6 +377,7 @@ _we_create() {
 
     local setup="$WE_DIR/we_$name"
     local alfile="$WE_DIR/we_${name}_alias"
+    local fnfile="$WE_DIR/we_${name}_func"
     local existed=0
     [ -f "$setup" ] && existed=1
 
@@ -382,8 +393,10 @@ _we_create() {
             printf '\n'
         } > "$setup"
         : > "$alfile"
+        : > "$fnfile"
     else
         printf 'we: profile %s already exists; keeping %s and %s\n' "$name" "$setup" "$alfile"
+        [ -f "$fnfile" ] || : > "$fnfile"
     fi
 
     # make `name` work in this shell (also drops any alias shadowing it)
@@ -415,9 +428,10 @@ _we_list() {
     while IFS= read -r n; do
         [ -n "$n" ] || continue
         found=1
-        local cnt=0
-        [ -f "$WE_DIR/we_${n}_alias" ] && cnt=$(grep -c '^alias ' "$WE_DIR/we_${n}_alias" 2>/dev/null)
-        printf '  %-16s %s alias(es)\n' "$n" "${cnt:-0}"
+        local acnt=0 fcnt=0
+        [ -f "$WE_DIR/we_${n}_alias" ] && acnt=$(grep -c '^alias ' "$WE_DIR/we_${n}_alias" 2>/dev/null)
+        [ -f "$WE_DIR/we_${n}_func" ] && fcnt=$(grep -cE '^[A-Za-z_][A-Za-z0-9_]* \(\)[[:space:]]*$' "$WE_DIR/we_${n}_func" 2>/dev/null)
+        printf '  %-16s %s alias(es), %s func(s)\n' "$n" "${acnt:-0}" "${fcnt:-0}"
     done < <(_we_profiles)
     [ "$found" -eq 0 ] && printf '  (none)\n'
     return 0
@@ -433,6 +447,8 @@ _we_show() {
     cat "$WE_DIR/we_$name"
     printf '\n== %s ==\n' "$WE_DIR/we_${name}_alias"
     cat "$WE_DIR/we_${name}_alias" 2>/dev/null || printf '(none)\n'
+    printf '\n== %s ==\n' "$WE_DIR/we_${name}_func"
+    cat "$WE_DIR/we_${name}_func" 2>/dev/null || printf '(none)\n'
     return 0
 }
 
@@ -498,15 +514,21 @@ entering a profile:
 inside a profile subshell:
   walias <name> <command>   create a profile alias   e.g. walias b /x/.venv/bin/python
   wcd <name>                map <name> to the current dir  e.g. wcd m
+  wfunc <name> <body>       define + persist a profile function  e.g. wfunc hi 'echo hi'
   exit                      leave the subshell; new aliases are persisted
                             to $WE_DIR/we_foo_alias automatically
 
+  walias/wcd/wfunc also work in the base shell; there they persist to the
+  base files $WE_DIR/we_alias and $WE_DIR/we_func (available in every profile).
+
 files (all in $WE_DIR, default $HOME/.we):
   we                 this script (source it from .bashrc/.profile)
-  funcs.sh           walias / wcd implementation
+  funcs.sh           walias / wcd / wfunc implementation
   we_alias           base aliases for every shell (optional)
+  we_func            base functions for every shell (optional)
   we_<name>          profile setup script
   we_<name>_alias    persisted aliases of profile <name>
+  we_<name>_func     persisted functions of profile <name>
   state/             session snapshots and rcfiles (managed, do not edit)
 EOF
     return 0
