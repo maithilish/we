@@ -314,4 +314,36 @@ _we_session_cleanup() {
     return 0
 }
 
+# ---------------------------------------------------------------------------
+# Shared history (A2): one live $HISTFILE across the base shell, every profile,
+# and every terminal. The sync is chained into PROMPT_COMMAND (never clobbering
+# an existing one) and runs two builtins per prompt:
+#   history -a   append this shell's new lines to $HISTFILE
+#   history -n   pull other shells' new lines into this shell's history
+# Both are offset-tracked by bash, so repeated calls are cheap no-ops.
+# ---------------------------------------------------------------------------
+_we_hist_sync() {
+    history -a 2>/dev/null
+    history -n 2>/dev/null
+}
+
+# Idempotently chain _we_hist_sync into PROMPT_COMMAND. Handles both the
+# string form and the array form (bash 5.1+). Never clobbers an existing
+# PROMPT_COMMAND.
+_we_history_install() {
+    local d
+    d=$(declare -p PROMPT_COMMAND 2>/dev/null)
+    if [[ $d == "declare -a"* ]]; then
+        # array form (bash 5.1+): append as a new element
+        PROMPT_COMMAND+=("_we_hist_sync")
+    else
+        # string form (or unset)
+        case ${PROMPT_COMMAND-} in
+            *_we_hist_sync*) : ;;   # already installed
+            "") PROMPT_COMMAND="_we_hist_sync" ;;
+            *)  PROMPT_COMMAND="$PROMPT_COMMAND; _we_hist_sync" ;;
+        esac
+    fi
+}
+
 return 0 2>/dev/null || true

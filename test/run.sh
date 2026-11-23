@@ -623,6 +623,68 @@ ok "we ls does not list func"       '! grep -q "  func " "$SANDBOX/t22_ls.txt"'
 ok "we ls does not list f22a_func"  '! grep -q "  f22a_func " "$SANDBOX/t22_ls.txt"'
 ok "we ls lists f22a"               'grep -q "  f22a " "$SANDBOX/t22_ls.txt"'
 
+# --- T23: PROMPT_COMMAND chaining (A2) --------------------------------------
+# _we_history_install chains _we_hist_sync into PROMPT_COMMAND: present in the
+# base shell and in profile shells, idempotent (never added twice), and never
+# clobbers a pre-existing PROMPT_COMMAND.
+section "T23 PROMPT_COMMAND chaining"
+cat > "$SANDBOX/t23_base.sh" <<'EOF'
+echo "base_pc_has_sync=$(case $PROMPT_COMMAND in *_we_hist_sync*) echo yes;; *) echo no;; esac)"
+_we_history_install
+echo "base_pc_count=$(printf '%s' "$PROMPT_COMMAND" | grep -o '_we_hist_sync' | wc -l)"
+EOF
+parent_shell "$SANDBOX/t23_base.sh"
+ok "base PC has _we_hist_sync"   'clean | grep -q "base_pc_has_sync=yes"'
+ok "base PC idempotent (count=1)" 'clean | grep -q "base_pc_count=1"'
+
+cat > "$SANDBOX/t23_prof.sh" <<'EOF'
+echo "prof_pc_has_sync=$(case $PROMPT_COMMAND in *_we_hist_sync*) echo yes;; *) echo no;; esac)"
+EOF
+enter f23 "$SANDBOX/t23_prof.sh"
+ok "profile PC has _we_hist_sync" 'clean | grep -q "prof_pc_has_sync=yes"'
+
+# a pre-existing PROMPT_COMMAND is preserved (chained, not clobbered)
+cat > "$SANDBOX/t23_preserve.sh" <<'EOF'
+PROMPT_COMMAND='echo existing_prompt'
+_we_history_install
+echo "preserve_existing=$(case $PROMPT_COMMAND in *echo\ existing_prompt*) echo yes;; *) echo no;; esac)"
+echo "preserve_sync=$(case $PROMPT_COMMAND in *_we_hist_sync*) echo yes;; *) echo no;; esac)"
+EOF
+parent_shell "$SANDBOX/t23_preserve.sh"
+ok "existing PC preserved"        'clean | grep -q "preserve_existing=yes"'
+ok "sync appended to existing PC" 'clean | grep -q "preserve_sync=yes"'
+
+# --- T24: history flush + cross-shell sharing (A2) ---------------------------
+# A command typed in the base shell is flushed to $HISTFILE and is visible in
+# a profile's history (loaded via history -r at profile entry). A command typed
+# in the profile is flushed back to the same $HISTFILE.
+section "T24 history flush + cross-shell sharing"
+T24_HIST="$SANDBOX/t24_hist"
+rm -f "$T24_HIST"
+cat > "$SANDBOX/t24_prof.sh" <<'EOF'
+echo "prof_sees_base=$(history | grep -c 't24_base_cmd')"
+history -s "t24_prof_cmd"
+_we_hist_sync
+echo "prof_flushed=$(grep -c 't24_prof_cmd' "$HISTFILE")"
+EOF
+(
+    cd -- "$SANDBOX" || exit 99
+    export WE_DIR="$SANDBOX/.we"
+    # HISTFILE is set but NOT exported: the exec'd profile bash does not
+    # inherit it, so the rcfile's history -r (after the root snapshot restores
+    # HISTFILE) is the only path by which the profile sees the base history.
+    HISTFILE="$T24_HIST"
+    . "$WE_DIR/we"
+    shopt -s expand_aliases
+    history -s "t24_base_cmd"
+    _we_hist_sync
+    we f24 >/dev/null 2>&1
+    f24
+) < "$SANDBOX/t24_prof.sh" > "$CAPTURE" 2>&1
+ok "base cmd flushed to HISTFILE"      "grep -q 't24_base_cmd' '$T24_HIST'"
+ok "profile sees base cmd in history"  'clean | grep -q "prof_sees_base=[1-9]"'
+ok "profile cmd flushed to HISTFILE"   "grep -q 't24_prof_cmd' '$T24_HIST'"
+
 # ============================================================================
 printf '\n========================================\n'
 printf 'TOTAL: pass=%d fail=%d\n' "$PASS" "$FAIL"

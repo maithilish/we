@@ -56,6 +56,11 @@ find "$WE_DIR/state" -maxdepth 1 -type f -mmin +1440 -delete 2>/dev/null || :
 # base functions (declare -f blocks), active in every shell
 [ -f "$WE_DIR/we_func" ] && . "$WE_DIR/we_func"
 
+# shared history: chain _we_hist_sync into PROMPT_COMMAND so the base shell
+# and every profile share one live $HISTFILE (idempotent, never clobbers an
+# existing PROMPT_COMMAND). See _we_history_install in funcs.sh.
+_we_history_install 2>/dev/null
+
 # --- internal helpers --------------------------------------------------------
 
 # names allowed for a profile
@@ -218,6 +223,11 @@ _we_switch() {
     rc="$WE_DIR/state/rc_${prof}_${sess_sid}"
     _we_render_rc "$prof" "$root_sid" "$sess_sid" "$gen" "$rc" || return 1
 
+    # flush this profile's history to the shared file before exec: exec
+    # replaces the process without running the EXIT trap, so the prompt-based
+    # flush would not catch the last command typed in this profile
+    history -a 2>/dev/null
+
     # become the new profile (does not return)
     if [ -t 0 ]; then
         exec bash --rcfile "$rc"
@@ -292,6 +302,14 @@ shopt -s extglob
 # restore the base working directory (PWD is a special var, stored separately)
 [ -f "$WE_DIR/state/root_${root_sid}.cwd" ]      && . "$WE_DIR/state/root_${root_sid}.cwd"
 
+# 1b) shared history: reload the history file now that the snapshot has
+#     restored the base shell's HISTFILE (a fresh exec'd bash may have read
+#     the default ~/.bash_history at startup before HISTFILE was set). Clear
+#     first so the startup read is not duplicated, then load the full shared
+#     history.
+history -c 2>/dev/null
+history -r 2>/dev/null
+
 # 2) baseline of aliases before profile-specific ones: used on exit to
 #    persist only what belongs to this profile
 alias > "\$WE_DIR/state/${sess_sid}.pre" 2>/dev/null || : > "\$WE_DIR/state/${sess_sid}.pre"
@@ -306,13 +324,20 @@ alias > "\$WE_DIR/state/${sess_sid}.pre" 2>/dev/null || : > "\$WE_DIR/state/${se
 # 5) profile tools: walias, wcd, wfunc (persist into we_${prof}_alias / _func)
 [ -f "\$WE_DIR/funcs.sh" ] && . "\$WE_DIR/funcs.sh"
 
+# 5b) shared history: chain _we_hist_sync into PROMPT_COMMAND so this profile
+#     shares one live history file with the base shell and other
+#     profiles/terminals (idempotent, never clobbers an existing
+#     PROMPT_COMMAND)
+_we_history_install
+
 # 6) prompt: keep the profile visible
 PS1='\\[\\e[01;36m\\]we:$prof\\[\\e[0m\\] \\w \\$ '
 
-# 7) on exit: persist profile-specific aliases, then remove this session's
-#    transient files (rc + pre/cur). Each session cleans up after itself, so
-#    the last profile in a switch chain is handled too.
-trap '_we_profile_exit_save "$prof" "$sess_sid"; _we_session_cleanup "$prof" "$sess_sid"' EXIT
+# 7) on exit: flush this session's history to the shared file, persist
+#    profile-specific aliases, then remove this session's transient files
+#    (rc + pre/cur). Each session cleans up after itself, so the last profile
+#    in a switch chain is handled too.
+trap 'history -a 2>/dev/null; _we_profile_exit_save "$prof" "$sess_sid"; _we_session_cleanup "$prof" "$sess_sid"' EXIT
 WE_RC_EOF
     return $?
 }

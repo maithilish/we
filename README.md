@@ -137,12 +137,41 @@ $ wfunc hi 'echo "hi $1 (v2)"'    # redefining upserts (replaces the old block)
   `wfunc` warns about this at definition time. (This is the same precedence
   rule that lets a profile shadow a base alias.)
 
+## Shared history
+
+All shells managed by `we` (the base shell and every profile) share a
+single history file — your normal `$HISTFILE` (default `~/.bash_history`).
+Commands you type in any profile appear in the base shell's history and in
+every other terminal, and vice versa.
+
+How it works:
+
+* **At source time** (base shell) and **at profile startup** (rcfile),
+  `we` chains a small `_we_hist_sync` function into `PROMPT_COMMAND`.
+  It never clobbers an existing `PROMPT_COMMAND`; it appends (both string
+  and array forms are handled).
+* **`_we_hist_sync`** runs `history -a` (append new lines to the file) and
+  `history -n` (read lines added by other shells) before every prompt.
+  This gives live cross-terminal sharing: type a command in one terminal,
+  and it appears in the history of every other terminal at the next prompt.
+* **At profile startup**, the rcfile runs `history -c` (clear the in-memory
+  history that bash loaded from the default `~/.bash_history` at process
+  start) followed by `history -r` (load the full shared history file).
+  This ensures the profile starts with the complete shared history, not a
+  stale or empty one.
+* **Before `exec`-based switching** and **on profile exit**, `history -a`
+  flushes the outgoing shell's commands to the file so they are not lost.
+
+The mechanism is non-intrusive: it only adds per-prompt `history` builtin
+calls. It never touches command parsing, expansion, or execution, and does
+not modify `HISTSIZE`, `HISTFILESIZE`, or `HISTCONTROL`.
+
 ## Files
 
 | file | purpose |
 |---|---|
 | `~/.we/we` | main script, sourced at login |
-| `~/.we/funcs.sh` | `walias`/`wcd`/`wfunc` + persistence helpers |
+| `~/.we/funcs.sh` | `walias`/`wcd`/`wfunc` + history sync + persistence helpers |
 | `~/.we/we_alias` | base aliases for every shell (optional) |
 | `~/.we/we_func` | base functions for every shell (optional) |
 | `~/.we/we_<name>` | profile setup script (cd, echo, venv activation, ...) |
@@ -171,6 +200,9 @@ $ wfunc hi 'echo "hi $1 (v2)"'    # redefining upserts (replaces the old block)
   profile only sees what it inherited from your shell plus its own files.
 * Re-sourcing `~/.we/we` is safe and idempotent.
 * `WE_DIR` can be set before sourcing to relocate the whole thing.
+* Shared history reuses your existing `$HISTFILE`; it does not create a
+  separate history file. If you set `HISTFILE` to a custom path before
+  sourcing `we`, all profiles will use that path.
 * Lifecycle: each profile session removes its own `state/` files on exit;
   the base shell removes its `root_*` snapshot on exit (only if you have no
   EXIT trap of your own). A 1-day sweep at source time is the backstop for
