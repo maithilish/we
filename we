@@ -37,7 +37,7 @@
 : "${WE_DIR:=$HOME/.we}"
 export WE_DIR
 
-WE_VERSION=2.1
+WE_VERSION=2.2
 
 mkdir -p -- "$WE_DIR/state" 2>/dev/null || {
     printf 'we: cannot create %s/state, is $HOME writable?\n' "$WE_DIR" >&2
