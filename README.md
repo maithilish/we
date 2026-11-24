@@ -27,8 +27,14 @@ Base-shell aliases and functions are inherited by every profile.
 - **Full shell inheritance** — a profile subshell inherits all exported
   variables, local variables, functions, and aliases from the parent shell.
 - **`walias`** — create a persisted alias (profile-specific or base).
+  `walias -d <name>` deletes one.
 - **`wcd`** — one-shot alias to `cd` into the current directory.
 - **`wfunc`** — define and persist a function (profile-specific or base).
+  `wfunc -d <name>` deletes one.
+- **Danger check** — `walias` and `wfunc` scan the value for catastrophic
+  commands (`rm -rf /`, `mkfs`, fork bombs, raw-device writes, …) and refuse
+  them outright. Dangerous-but-scoped commands (`rm -rf ./build`, `chmod -R`,
+  `shutdown`, …) require typing uppercase **Y** to confirm.
 - **Plain `alias` works too** — session aliases are captured on exit and
   persisted automatically.
 - **Profile-to-profile switching** — type a profile name from inside another
@@ -100,8 +106,10 @@ echo 'source "$HOME/.we/we"' >> ~/.bashrc
 | command | effect |
 |---|---|
 | `walias <name> <cmd>` | create + persist an alias |
+| `walias -d <name>` | delete a persisted alias |
 | `wcd <name>` | alias `<name>` → `cd <current dir>` |
 | `wfunc <name> <body>` | define + persist a function |
+| `wfunc -d <name>` | delete a persisted function |
 | `alias <name>='<cmd>'` | plain alias (persisted on exit) |
 | `exit` | leave the profile; new aliases are persisted |
 
@@ -171,7 +179,7 @@ design decisions, and pitfalls.
 bash test/run.sh
 ```
 
-114 assertions across 24 test groups. Runs in a sandbox under `/tmp`; does
+162 assertions across 26 test groups. Runs in a sandbox under `/tmp`; does
 not touch your real `~/.we`.
 
 ---

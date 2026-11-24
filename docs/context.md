@@ -19,15 +19,15 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 
 ```
 /ai/gen/we/                  # git repo (origin: local, no remote yet)
-  we                         # main script (594 ln), sourced at login
-  funcs.sh                   # profile tools + persistence (349 ln)
+  we                         # main script (597 ln), sourced at login
+  funcs.sh                   # profile tools + persistence (608 ln)
   install.sh                 # installer (179 ln), fresh + update paths
-  README.md                  # GitHub-ready README (197 ln)
+  README.md                  # GitHub-ready README (205 ln)
   docs/
-    architecture.md          # full architecture doc (462 ln)
+    architecture.md          # full architecture doc (503 ln)
     context.md               # this file
   test/
-    run.sh                   # regression harness (692 ln, 114 assertions)
+    run.sh                   # regression harness (868 ln, 162 assertions)
   .gitignore
 ```
 
@@ -51,12 +51,17 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 
 **`funcs.sh`** (sourced by base shell AND every profile subshell):
 - `walias <name> <value>` — creates alias + upserts to target file
+- `walias -d <name>` — deletes alias from shell + persistence file
 - `wcd <name>` — `walias <name> "cd '<pwd>'"` (spaces-safe)
 - `wfunc <name> <body>` — `eval` defines function + upserts `declare -f` block to target file
+- `wfunc -d <name>` — deletes function from shell + persistence file
+- `_we_danger_check <value>` — scans for catastrophic/dangerous commands; hard-blocks or asks for uppercase Y
 - `_we_profile_alias_file` — echoes `we_<prof>_alias` or `we_alias`
 - `_we_profile_alias_upsert <name> <value>` — atomic mktemp+mv upsert
+- `_we_profile_alias_delete <name>` — atomic mktemp+mv delete
 - `_we_profile_func_file` — echoes `we_<prof>_func` or `we_func`
 - `_we_profile_func_upsert <name>` — block-stripper upsert (removes old `name ()` … `}` block, appends new)
+- `_we_profile_func_delete <name>` — block-stripper delete
 - `_we_profile_exit_save <prof> <sid>` — EXIT trap: diffs `*.pre` vs `*.cur`, persists session-new aliases
 - `_we_session_cleanup <prof> <sid>` — removes `rc_*`, `*.pre`, `*.cur`
 - `_we_hist_sync` — `history -a` + `history -n`
@@ -107,6 +112,10 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 | install.sh refactor | `e3a0db0` | ✅ |
 | docs (architecture + README) | `f9cb850` | ✅ |
 | AI credit fix | `925ec32` | ✅ |
+| security review + LICENSE | `af7f2a7` | ✅ |
+| root → base rename | `f9e2f53` | ✅ 114/114 |
+| danger check (walias/wfunc) | `bf36d10` | ✅ 144/144 |
+| walias -d / wfunc -d | `49ad763` | ✅ 162/162 |
 
 ### Features implemented and working
 
@@ -134,12 +143,12 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 
 ## 5. Testing
 
-- **Harness**: `test/run.sh` (692 ln, 114 assertions, 24 test groups T1–T24)
+- **Harness**: `test/run.sh` (862 ln, 162 assertions, 26 test groups T1–T26)
 - **Run**: `env -i PATH="$PATH" HOME=/tmp bash test/run.sh` (exit 0 = all green)
 - **Sandbox**: `/tmp/we_sandbox` (auto-created, auto-cleaned)
 - **Method**: `env -i` for clean env; `bash --rcfile <rc> -i` for forced-interactive profile entry; inner scripts fed via stdin; output captured to file; ANSI-stripped grep for assertions
 - **Key pattern**: write results to a file, grep the file (avoids vacuous matches from command-line echo in interactive capture)
-- **Current**: 114/114 green
+- **Current**: 162/162 green
 
 | group | tests | what |
 |---|---|---|
@@ -167,15 +176,17 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 | T22 | 3 | profile listing excludes func files |
 | T23 | 5 | PROMPT_COMMAND chaining |
 | T24 | 3 | history flush + cross-shell sharing |
+| T25 | 30 | danger check (hard block + confirm) |
+| T26 | 18 | walias -d / wfunc -d (delete) |
 
 ## 6. Files Modified/Created
 
-- `we` — main engine script (594 ln): all core logic (entry, switch, snapshot, rcfile, lifecycle, CLI)
-- `funcs.sh` — profile tools (349 ln): walias, wcd, wfunc, persistence, exit-save, history sync
+- `we` — main engine script (597 ln): all core logic (entry, switch, snapshot, rcfile, lifecycle, CLI)
+- `funcs.sh` — profile tools (608 ln): walias, wcd, wfunc, danger check, persistence, exit-save, history sync
 - `install.sh` — installer (179 ln): fresh install + update with confirmation, v1 migration
-- `test/run.sh` — regression harness (692 ln): 114 assertions, 24 test groups
-- `README.md` — GitHub-ready README (197 ln): features, install, usage, AI credit
-- `docs/architecture.md` — architecture doc (462 ln): data flow, design decisions, pitfalls
+- `test/run.sh` — regression harness (868 ln): 162 assertions, 26 test groups
+- `README.md` — GitHub-ready README (205 ln): features, install, usage, AI credit
+- `docs/architecture.md` — architecture doc (503 ln): data flow, design decisions, pitfalls
 - `docs/context.md` — this file: session bootstrap context
 - `.gitignore` — ignores `state/`, `*.bak.*`, temp files
 
@@ -228,14 +239,9 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 
 2. **Verify GitHub rendering**: open the repo URL, check README.md renders correctly (tables, code blocks, links to `docs/architecture.md`).
 
-3. **Optional: add a LICENSE file** (README says MIT but no LICENSE file exists):
-   ```bash
-   # Generate MIT LICENSE file with the user's name/copyright
-   ```
-
 ## 9. Any Other Aspects
 
-- **Git repo**: `/ai/gen/we`, branch `main`, 14 commits, no remote configured.
+- **Git repo**: `/ai/gen/we`, branch `main`, 19 commits, no remote configured.
 - **Deployed**: `/home/m/.we` has v2.2. 21 real profiles. `~/.bashrc` sources it.
 - **Backups**: 3 backups in `/home/m/` (`.we.bak.*`).
 - **Real profiles** (21): ai, cflow, cofi, cofiw, ctab, dbg3, foo, idea, it, itax, maths, mock, mu, music, nws, os, pos, sc, u, ub, wind.

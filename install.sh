@@ -177,3 +177,4 @@ else
     patch_bashrc
     log "done. Open a new shell (or: source $TARGET/we)"
 fi
+

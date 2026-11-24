@@ -132,6 +132,9 @@ Three layers of cleanup:
   immediately upserts it into the target file (`we_<prof>_alias` or
   `we_alias`). Upsert = remove old line for this name, append new line.
   Atomic via `mktemp` + `mv`.
+- **`walias -d <name>`**: removes the alias from the live shell (`unalias`)
+  and from the persistence file (grep-v + atomic `mktemp`/`mv`). Non-existent
+  names are handled gracefully.
 - **`wcd <name>`**: shorthand for `walias <name> "cd '<current dir>'"`.
   The path is single-quoted so spaces survive.
 - **Plain `alias`**: not persisted eagerly. On profile exit, the `EXIT` trap
@@ -151,11 +154,46 @@ Three layers of cleanup:
   or `we_func`). The `declare -f` form is re-source safe (quoting, arrays,
   attributes preserved). Upsert removes the old block (from `name ()` to
   the closing `}` at column 0) and appends the new one.
+- **`wfunc -d <name>`**: removes the function from the live shell
+  (`unset -f`) and from the persistence file (block-stripper + atomic
+  `mktemp`/`mv`). Non-existent names are handled gracefully.
 - **Profile functions** are isolated to that profile. **Base functions**
   are universal (same model as base aliases).
 - **Name collision with a profile**: bash gives functions precedence over
   commands, so a function named `foo` shadows the profile entry command.
   `wfunc` warns at definition time. No blocking — the user's choice.
+
+### Danger check
+
+`walias` and `wfunc` scan the value (or function body) for dangerous command
+patterns before creating anything. Two tiers:
+
+**Hard block** (refused outright, no confirmation):
+
+| pattern | reason |
+|---|---|
+| `rm` targeting `/`, `~`, `/*`, `*`, `%` | deletes root filesystem, home, or all files |
+| `mkfs` (any variant) | formats a block device, destroys all data |
+| `dd … of=/dev/` | raw write to a block device |
+| `:() {` | fork bomb, DoS |
+| `mv /dev/null` | overwrites any file with empty content |
+| `> /dev/sd*`, `nvme*`, `hd*`, `xvd*`, `mmcblk*` | raw device truncate |
+| `find / … -delete` | mass deletion from root |
+
+**Confirm** (requires uppercase **Y**):
+
+| pattern | reason |
+|---|---|
+| `rm -r` / `rm -rf` (any other target) | recursive deletion, no undo |
+| `chmod -R` | recursive permission change |
+| `find … -delete` (not from `/`) | mass deletion |
+| `dd` (without `of=/dev/`) | raw block copy |
+| `shutdown` / `reboot` / `halt` / `poweroff` | system power command |
+
+The check runs once at creation time (no runtime overhead). It is a nudge,
+not a security boundary — the user has full shell access and can type any
+command directly. `WE_DANGER_AUTOCONFIRM` env var skips the interactive
+prompt: `Y` = auto-confirm, anything else = auto-cancel, unset = interactive.
 
 ### Profile setup script
 
@@ -416,8 +454,8 @@ the builtin, making `cd` unusable.
 
 ## Testing
 
-The test harness (`test/run.sh`) runs 114 assertions across 24 test groups
-(T1–T24) in a sandbox under `/tmp`. It uses `env -i` for a clean
+The test harness (`test/run.sh`) runs 162 assertions across 26 test groups
+(T1–T26) in a sandbox under `/tmp`. It uses `env -i` for a clean
 environment and `bash --rcfile -i` for forced-interactive profile entry.
 
 Key test groups:
@@ -448,6 +486,8 @@ Key test groups:
 | T22 | profile listing excludes func files |
 | T23 | PROMPT_COMMAND chaining (A2) |
 | T24 | history flush + cross-shell sharing (A2) |
+| T25 | danger check (hard block + confirm) |
+| T26 | walias -d / wfunc -d (delete) |
 
 Run: `bash test/run.sh` (exit 0 = all green).
 
@@ -460,3 +500,4 @@ Run: `bash test/run.sh` (exit 0 = all green).
 | 2.0 | initial v2 engine (base snapshot, exec switching, lifecycle) |
 | 2.1 | edge cases & hardening (extglob fix, name validation, state sweep) |
 | 2.2 | A0 (universal base walias), A1 (wfunc), A2 (shared history) |
+| 2.3 | danger check (walias/wfunc safety scan), walias -d / wfunc -d (delete) |
