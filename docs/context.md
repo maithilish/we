@@ -1,4 +1,4 @@
-# Session Context — `we` v2.2
+# Session Context — `we` v2.3
 
 ## 1. Current Project Objective
 
@@ -19,15 +19,15 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 
 ```
 /ai/gen/we/                  # git repo (origin: local, no remote yet)
-  we                         # main script (597 ln), sourced at login
-  funcs.sh                   # profile tools + persistence (608 ln)
-  install.sh                 # installer (179 ln), fresh + update paths
-  README.md                  # GitHub-ready README (205 ln)
+  we                         # main script (609 ln), sourced at login
+  funcs.sh                   # profile tools + persistence (610 ln)
+  install.sh                 # installer (180 ln), fresh + update paths
+  README.md                  # GitHub-ready README (209 ln)
   docs/
-    architecture.md          # full architecture doc (503 ln)
+    architecture.md          # full architecture doc (509 ln)
     context.md               # this file
   test/
-    run.sh                   # regression harness (868 ln, 162 assertions)
+    run.sh                   # regression harness (960 ln, 181 assertions)
   .gitignore
 ```
 
@@ -45,14 +45,14 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 - `_we_base_cleanup <sid>` — removes `base_<sid>.*` files; installed as base-shell EXIT trap only if user has none
 - `_we_valid_name <name>` — regex `^[A-Za-z0-9][A-Za-z0-9._-]*$`, rejects `we`, `alias`
 - `_we_profiles` — lists profile names from `we_*` files, skips `alias`, `func`, `*_alias`, `*_func`
-- `_we_list`, `_we_show <name>`, `_we_del <name>` — management commands
+- `_we_list`, `_we_show <name>`, `_we_del <name>` — management commands (both validate name via `_we_valid_name` before file ops)
 - `_we_help` — help text
 - Source-time: creates `state/`, runs 1-day sweep, sources `funcs.sh`/`we_alias`/`we_func`, calls `_we_history_install`, registers all profiles, installs base EXIT trap, exports all functions
 
 **`funcs.sh`** (sourced by base shell AND every profile subshell):
-- `walias <name> <value>` — creates alias + upserts to target file
+- `walias <name> <value>` — creates alias + upserts to target file (name validated: `^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 - `walias -d <name>` — deletes alias from shell + persistence file
-- `wcd <name>` — `walias <name> "cd '<pwd>'"` (spaces-safe)
+- `wcd <name>` — `walias <name> "cd '<pwd>'"` (spaces-safe, same name validation)
 - `wfunc <name> <body>` — `eval` defines function + upserts `declare -f` block to target file
 - `wfunc -d <name>` — deletes function from shell + persistence file
 - `_we_danger_check <value>` — scans for catastrophic/dangerous commands; hard-blocks or asks for uppercase Y
@@ -116,6 +116,7 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 | root → base rename | `f9e2f53` | ✅ 114/114 |
 | danger check (walias/wfunc) | `bf36d10` | ✅ 144/144 |
 | walias -d / wfunc -d | `49ad763` | ✅ 162/162 |
+| bug fixes (code review) | `3c881f0` | ✅ 181/181 |
 
 ### Features implemented and working
 
@@ -134,7 +135,7 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 
 ### Deployed state
 
-- `/home/m/.we` has **v2.2** (all A phases)
+- `/home/m/.we` has **v2.2** (all A phases; v2.3 bug fixes not yet deployed)
 - Backups: `/home/m/.we.bak.20261116-184850`, `/home/m/.we.bak.20261117-160827`, `/home/m/.we.bak.20261123-153047`
 - 21 real profiles migrated from v1
 - `~/.bashrc` sources `$HOME/.we/we`
@@ -143,12 +144,12 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 
 ## 5. Testing
 
-- **Harness**: `test/run.sh` (862 ln, 162 assertions, 26 test groups T1–T26)
+- **Harness**: `test/run.sh` (960 ln, 181 assertions, 30 test groups T1–T30)
 - **Run**: `env -i PATH="$PATH" HOME=/tmp bash test/run.sh` (exit 0 = all green)
 - **Sandbox**: `/tmp/we_sandbox` (auto-created, auto-cleaned)
 - **Method**: `env -i` for clean env; `bash --rcfile <rc> -i` for forced-interactive profile entry; inner scripts fed via stdin; output captured to file; ANSI-stripped grep for assertions
 - **Key pattern**: write results to a file, grep the file (avoids vacuous matches from command-line echo in interactive capture)
-- **Current**: 162/162 green
+- **Current**: 181/181 green
 
 | group | tests | what |
 |---|---|---|
@@ -178,13 +179,17 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 | T24 | 3 | history flush + cross-shell sharing |
 | T25 | 30 | danger check (hard block + confirm) |
 | T26 | 18 | walias -d / wfunc -d (delete) |
+| T27 | 9 | walias/wcd name validation (regex) |
+| T28 | 6 | we del: func file removal + name validation |
+| T29 | 4 | we show: name validation |
+| T30 | 4 | danger check: rm ~/* hard-block |
 
 ## 6. Files Modified/Created
 
 - `we` — main engine script (597 ln): all core logic (entry, switch, snapshot, rcfile, lifecycle, CLI)
 - `funcs.sh` — profile tools (608 ln): walias, wcd, wfunc, danger check, persistence, exit-save, history sync
 - `install.sh` — installer (179 ln): fresh install + update with confirmation, v1 migration
-- `test/run.sh` — regression harness (868 ln): 162 assertions, 26 test groups
+- `test/run.sh` — regression harness (960 ln): 181 assertions, 30 test groups
 - `README.md` — GitHub-ready README (205 ln): features, install, usage, AI credit
 - `docs/architecture.md` — architecture doc (503 ln): data flow, design decisions, pitfalls
 - `docs/context.md` — this file: session bootstrap context
@@ -241,8 +246,8 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 
 ## 9. Any Other Aspects
 
-- **Git repo**: `/ai/gen/we`, branch `main`, 19 commits, no remote configured.
-- **Deployed**: `/home/m/.we` has v2.2. 21 real profiles. `~/.bashrc` sources it.
+- **Git repo**: `/ai/gen/we`, branch `main`, 21 commits, no remote configured.
+- **Deployed**: `/home/m/.we` has v2.2 (v2.3 bug fixes not yet deployed). 21 real profiles. `~/.bashrc` sources it.
 - **Backups**: 3 backups in `/home/m/` (`.we.bak.*`).
 - **Real profiles** (21): ai, cflow, cofi, cofiw, ctab, dbg3, foo, idea, it, itax, maths, mock, mu, music, nws, os, pos, sc, u, ub, wind.
 - **Real base aliases**: 9 in `~/.we/we_alias`.

@@ -131,12 +131,15 @@ Three layers of cleanup:
 - **`walias <name> <value>`**: creates the alias in the current shell and
   immediately upserts it into the target file (`we_<prof>_alias` or
   `we_alias`). Upsert = remove old line for this name, append new line.
-  Atomic via `mktemp` + `mv`.
+  Atomic via `mktemp` + `mv`. Name must match
+  `^[A-Za-z0-9][A-Za-z0-9._-]*$` (prevents regex injection into the
+  upsert/delete grep patterns).
 - **`walias -d <name>`**: removes the alias from the live shell (`unalias`)
   and from the persistence file (grep-v + atomic `mktemp`/`mv`). Non-existent
   names are handled gracefully.
 - **`wcd <name>`**: shorthand for `walias <name> "cd '<current dir>'"`.
-  The path is single-quoted so spaces survive.
+  The path is single-quoted so spaces survive. Same name validation as
+  `walias`.
 - **Plain `alias`**: not persisted eagerly. On profile exit, the `EXIT` trap
   diffs the live alias table against the baseline taken at entry
   (`*.pre` vs `*.cur`) and persists only the **new** names. This means
@@ -172,7 +175,7 @@ patterns before creating anything. Two tiers:
 
 | pattern | reason |
 |---|---|
-| `rm` targeting `/`, `~`, `/*`, `*`, `%` | deletes root filesystem, home, or all files |
+| `rm` targeting `/`, `~`, `~/`, `~/*`, `/*`, `*`, `%` | deletes root filesystem, home, or all files |
 | `mkfs` (any variant) | formats a block device, destroys all data |
 | `dd … of=/dev/` | raw write to a block device |
 | `:() {` | fork bomb, DoS |
@@ -454,8 +457,8 @@ the builtin, making `cd` unusable.
 
 ## Testing
 
-The test harness (`test/run.sh`) runs 162 assertions across 26 test groups
-(T1–T26) in a sandbox under `/tmp`. It uses `env -i` for a clean
+The test harness (`test/run.sh`) runs 181 assertions across 30 test groups
+(T1–T30) in a sandbox under `/tmp`. It uses `env -i` for a clean
 environment and `bash --rcfile -i` for forced-interactive profile entry.
 
 Key test groups:
@@ -488,6 +491,10 @@ Key test groups:
 | T24 | history flush + cross-shell sharing (A2) |
 | T25 | danger check (hard block + confirm) |
 | T26 | walias -d / wfunc -d (delete) |
+| T27 | walias/wcd name validation (regex) |
+| T28 | we del: func file removal + name validation |
+| T29 | we show: name validation |
+| T30 | danger check: rm ~/* hard-block |
 
 Run: `bash test/run.sh` (exit 0 = all green).
 
@@ -500,4 +507,4 @@ Run: `bash test/run.sh` (exit 0 = all green).
 | 2.0 | initial v2 engine (base snapshot, exec switching, lifecycle) |
 | 2.1 | edge cases & hardening (extglob fix, name validation, state sweep) |
 | 2.2 | A0 (universal base walias), A1 (wfunc), A2 (shared history) |
-| 2.3 | danger check (walias/wfunc safety scan), walias -d / wfunc -d (delete) |
+| 2.3 | danger check, walias -d / wfunc -d, bug fixes (del func file, name validation, rm ~/*) |

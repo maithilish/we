@@ -1,5 +1,9 @@
 # we — work-env profile manager for bash
 
+Suppose you are working with LLMs. Typically, you have to navigate to your /ai folder, spin up the llama.cpp server, and switch to your working directory. Repeating this setup every time is tedious. Instead, you can save these frequently used commands as alias shortcuts. The next time you work, simply switch to your ai environment to load and use your saved aliases instantly. Similarly, if you need to resize your /tmp folder, you don't have to look up the command every time—just save it as an alias inside an environment.
+
+Our tool lets you effortlessly manage your work environments, aliases, and bash functions in one place.
+
 Keep frequently-used aliases and functions in **named profiles**. Step into
 a profile by typing its name; step out with `exit`. Everything you create
 inside a profile is persisted and restored the next time you enter it.
@@ -179,7 +183,7 @@ design decisions, and pitfalls.
 bash test/run.sh
 ```
 
-162 assertions across 26 test groups. Runs in a sandbox under `/tmp`; does
+181 assertions across 30 test groups. Runs in a sandbox under `/tmp`; does
 not touch your real `~/.we`.
 
 ---
