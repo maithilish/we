@@ -93,6 +93,9 @@ _we_profiles() {
 # happens first), so drop it
 _we_register_profile() {
     local n=$1
+    # validate before eval: filenames in $WE_DIR are the only input, but a
+    # malicious filename (e.g. we_$(cmd)) must not reach eval
+    [[ $n =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || return 0
     unalias -- "$n" 2>/dev/null
     eval "$n() { we_enter '$n'; }"
 }
