@@ -48,6 +48,163 @@ _we_profile_alias_upsert() {
 }
 
 # ---------------------------------------------------------------------------
+# _we_danger_check <value>
+#   Scan an alias value or function body for dangerous command patterns.
+#
+#   Two tiers:
+#     HARD BLOCK  – catastrophic, no recovery. Refused outright.
+#     CONFIRM     – dangerous. Asks for uppercase Y before proceeding.
+#
+#   Returns:
+#     0  safe (or confirmed) – proceed
+#     1  refused (hard block or user cancelled) – abort
+#
+#   Set WE_DANGER_AUTOCONFIRM to skip the interactive prompt:
+#     Y  = auto-confirm
+#     anything else = auto-cancel
+#     (unset = interactive read from stdin)
+# ---------------------------------------------------------------------------
+_we_danger_check() {
+    local value=$1
+
+    # -- helpers ----------------------------------------------------------
+    _dc_refuse() {
+        printf '\n' >&2
+        printf '\e[1;31m  we: REFUSED\e[0m – %s\n' "$1" >&2
+        printf '  command : %s\n' "$value" >&2
+        printf '  reason  : %s\n' "$2" >&2
+        printf '\n' >&2
+    }
+
+    _dc_confirm() {
+        printf '\n' >&2
+        printf '\e[1;33m  we: WARNING\e[0m – %s\n' "$1" >&2
+        printf '  command : %s\n' "$value" >&2
+        printf '  reason  : %s\n' "$2" >&2
+        printf '\n' >&2
+        if [ -n "${WE_DANGER_AUTOCONFIRM-}" ]; then
+            if [ "$WE_DANGER_AUTOCONFIRM" = "Y" ]; then
+                printf '  (auto-confirmed: WE_DANGER_AUTOCONFIRM=Y)\n' >&2
+                return 0
+            fi
+            printf '  (auto-cancelled: WE_DANGER_AUTOCONFIRM=%s)\n' "$WE_DANGER_AUTOCONFIRM" >&2
+            return 1
+        fi
+        printf '  Type Y (uppercase) to confirm, anything else to cancel: ' >&2
+        local ans
+        IFS= read -r ans
+        if [ "$ans" = "Y" ]; then
+            return 0
+        fi
+        printf '  we: cancelled.\n' >&2
+        return 1
+    }
+
+    # -- HARD BLOCK: catastrophic, refuse ---------------------------------
+
+    # rm targeting /, ~, /*, * or %  (any flag combination)
+    #   matches:  rm -rf /   rm -fr ~   rm -r -f *   rm --recursive --force /
+    #   skips:    rm -rf /tmp/build   rm file.txt   rm -rf ./build
+    if printf '%s' "$value" | grep -qE '\brm\b[[:space:]]+(-+[a-zA-Z-]+[[:space:]]+)*(/|~|~/|/\*|\*|%)([[:space:];|&)]|$)'; then
+        _dc_refuse "catastrophic rm target" \
+            "rm targeting /, ~, /*, or * permanently deletes the root filesystem, your home directory, or every file in the current directory. There is no trash bin, no undo, no recovery."
+        return 1
+    fi
+
+    # mkfs (any variant: mkfs.ext4, mkfs.xfs, mkfs.vfat, …)
+    if printf '%s' "$value" | grep -qE '\bmkfs(\.[a-zA-Z0-9]+)?\b'; then
+        _dc_refuse "mkfs (filesystem format)" \
+            "mkfs formats a block device and destroys every byte of data on it. This is irreversible and cannot be undone with any recovery tool."
+        return 1
+    fi
+
+    # dd writing to a raw block device
+    if printf '%s' "$value" | grep -qE '\bdd\b[^|;&]*of=/dev/'; then
+        _dc_refuse "dd to raw device" \
+            "dd writes raw blocks directly to a device, bypassing the filesystem. Writing to /dev/sd*, /dev/nvme*, etc. destroys all data on the disk."
+        return 1
+    fi
+
+    # fork bomb
+    if printf '%s' "$value" | grep -qE ':\(\)[[:space:]]*\{'; then
+        _dc_refuse "fork bomb" \
+            "a fork bomb spawns processes exponentially until the system exhausts its process table and becomes unresponsive. Only a hard reboot recovers the system."
+        return 1
+    fi
+
+    # mv /dev/null (overwrites any file with empty content)
+    if printf '%s' "$value" | grep -qE '\bmv\b[[:space:]]+/dev/null\b'; then
+        _dc_refuse "mv /dev/null (file overwrite)" \
+            "mv /dev/null <file> replaces <file> with an empty file, destroying its contents irreversibly. This affects any file, including /etc/passwd, /etc/shadow, and system binaries."
+        return 1
+    fi
+
+    # redirect to raw block device
+    if printf '%s' "$value" | grep -qE '>[[:space:]]*/dev/(sd[a-z]|nvme|hd[a-z]|xvd[a-z]|mmcblk)'; then
+        _dc_refuse "redirect to raw block device" \
+            "redirecting output to /dev/sd*, /dev/nvme*, etc. writes raw data to the disk, bypassing the filesystem and destroying all data."
+        return 1
+    fi
+
+    # find / with -delete (mass deletion from root)
+    if printf '%s' "$value" | grep -qE '\bfind\b[[:space:]]+/( |$)[^|;&]*-delete'; then
+        _dc_refuse "find / -delete (mass deletion)" \
+            "find / -delete removes files from the entire filesystem starting at root. This is catastrophic and irreversible."
+        return 1
+    fi
+
+    # -- CONFIRM: dangerous, ask for uppercase Y --------------------------
+
+    # rm -r or rm -rf (any target not caught by hard block above)
+    if printf '%s' "$value" | grep -qE '\brm\b[[:space:]]+-+[a-zA-Z-]*[rR][a-zA-Z-]*'; then
+        if _dc_confirm "recursive rm" \
+            "recursive rm (-r / -rf) permanently deletes directories and all their contents. There is no trash bin and no undo. Double-check the target path."; then
+            return 0
+        fi
+        return 1
+    fi
+
+    # chmod -R (recursive permission change)
+    if printf '%s' "$value" | grep -qE '\bchmod\b[[:space:]]+-R\b'; then
+        if _dc_confirm "recursive chmod" \
+            "chmod -R changes permissions on every file in a directory tree. Wrong permissions can break system tools, expose sensitive files, or lock you out of your own directories."; then
+            return 0
+        fi
+        return 1
+    fi
+
+    # find with -delete (not from /)
+    if printf '%s' "$value" | grep -qE '\bfind\b[^|;&]*-delete'; then
+        if _dc_confirm "find -delete" \
+            "find -delete permanently removes every file matching the expression. There is no trash bin and no undo."; then
+            return 0
+        fi
+        return 1
+    fi
+
+    # dd (without of=/dev/, e.g. dd to a regular file)
+    if printf '%s' "$value" | grep -qE '\bdd\b'; then
+        if _dc_confirm "dd (raw block copy)" \
+            "dd performs raw block-level copies. A wrong of= target can destroy data on disks, USB drives, or other block devices."; then
+            return 0
+        fi
+        return 1
+    fi
+
+    # system power commands
+    if printf '%s' "$value" | grep -qE '\b(shutdown|reboot|halt|poweroff)\b'; then
+        if _dc_confirm "system power command" \
+            "this command will shut down, halt, or reboot the system. All unsaved work will be lost."; then
+            return 0
+        fi
+        return 1
+    fi
+
+    # safe
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # walias <name> <command...>
 #   create an alias in this shell and persist it for the current profile
 #   (or the base alias file when used outside a profile).
@@ -70,6 +227,12 @@ walias() {
 
     shift
     local value=$*
+
+    # danger check: refuse catastrophic values, confirm dangerous ones
+    if ! _we_danger_check "$value"; then
+        return 1
+    fi
+
     local file
     file=$(_we_profile_alias_file)
 
@@ -196,6 +359,11 @@ wfunc() {
     # strip trailing whitespace so the closing "; }" stays on the body's last
     # line (a trailing newline would put the ";" on its own line: a syntax error)
     while [[ $body =~ [[:space:]]$ ]]; do body=${body%?}; done
+
+    # danger check: refuse catastrophic values, confirm dangerous ones
+    if ! _we_danger_check "$body"; then
+        return 1
+    fi
 
     # define the function in this shell. eval parses the definition; the body
     # is not executed, so $1/$2/... are stored literally for call time.

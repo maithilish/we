@@ -685,6 +685,117 @@ ok "base cmd flushed to HISTFILE"      "grep -q 't24_base_cmd' '$T24_HIST'"
 ok "profile sees base cmd in history"  'clean | grep -q "prof_sees_base=[1-9]"'
 ok "profile cmd flushed to HISTFILE"   "grep -q 't24_prof_cmd' '$T24_HIST'"
 
+# --- T25: danger check ------------------------------------------------------
+section "T25 danger check"
+
+# helper: run a single walias/wfunc command in a profile, capture output
+_danger_test() { # $1 profile, $2 inner-script content, $3 env prefix (optional)
+    local prof=$1 content=$2 envprefix=${3-}
+    local script="$SANDBOX/danger_test.sh"
+    printf '%s\n' "$content" > "$script"
+    if [ -n "$envprefix" ]; then
+        env $envprefix bash -c "
+            cd '$SANDBOX' || exit 99
+            export WE_DIR='$SANDBOX/.we'
+            . \"\$WE_DIR/we\"
+            shopt -s expand_aliases
+            we '$prof' >/dev/null 2>&1
+            '$prof'
+        " < "$script" > "$CAPTURE" 2>&1
+    else
+        (
+            cd -- "$SANDBOX" || exit 99
+            export WE_DIR="$SANDBOX/.we"
+            . "$WE_DIR/we"
+            shopt -s expand_aliases
+            we "$prof" >/dev/null 2>&1
+            "$prof"
+        ) < "$script" > "$CAPTURE" 2>&1
+    fi
+}
+
+# T25.1: hard block – rm -rf /
+_danger_test foo "walias bad 'rm -rf /'
+echo rc=\$?"
+ok "T25.1 hard block: rm -rf / refused"  'clean | grep -q "REFUSED"'
+ok "T25.1 hard block: rc=1"              'clean | grep -q "rc=1"'
+ok "T25.1 hard block: alias not created" '! clean | grep -q "bad is set to"'
+
+# T25.2: hard block – rm -rf ~
+_danger_test foo "walias bad 'rm -rf ~'
+echo rc=\$?"
+ok "T25.2 hard block: rm -rf ~ refused"  'clean | grep -q "REFUSED"'
+ok "T25.2 hard block: rc=1"              'clean | grep -q "rc=1"'
+
+# T25.3: hard block – mkfs
+_danger_test foo "walias bad 'mkfs.ext4 /dev/sda1'
+echo rc=\$?"
+ok "T25.3 hard block: mkfs refused"      'clean | grep -q "REFUSED"'
+ok "T25.3 hard block: rc=1"              'clean | grep -q "rc=1"'
+
+# T25.4: hard block – fork bomb
+_danger_test foo "walias bad ':() { :|& };:'
+echo rc=\$?"
+ok "T25.4 hard block: fork bomb refused" 'clean | grep -q "REFUSED"'
+ok "T25.4 hard block: rc=1"              'clean | grep -q "rc=1"'
+
+# T25.5: hard block – dd of=/dev/
+_danger_test foo "walias bad 'dd if=/dev/zero of=/dev/sda'
+echo rc=\$?"
+ok "T25.5 hard block: dd of=/dev/ refused" 'clean | grep -q "REFUSED"'
+ok "T25.5 hard block: rc=1"                'clean | grep -q "rc=1"'
+
+# T25.6: hard block – mv /dev/null
+_danger_test foo "walias bad 'mv /dev/null /etc/passwd'
+echo rc=\$?"
+ok "T25.6 hard block: mv /dev/null refused" 'clean | grep -q "REFUSED"'
+ok "T25.6 hard block: rc=1"                 'clean | grep -q "rc=1"'
+
+# T25.7: confirm – rm -rf ./build (auto-confirm Y)
+_danger_test foo "walias build 'rm -rf ./build'
+echo rc=\$?" "WE_DANGER_AUTOCONFIRM=Y"
+ok "T25.7 confirm: rm -rf ./build confirmed" 'clean | grep -q "rc=0"'
+ok "T25.7 confirm: alias created"            'clean | grep -q "build is set to"'
+ok "T25.7 confirm: warning shown"            'clean | grep -q "WARNING"'
+
+# T25.8: confirm – rm -rf ./build (auto-cancel n)
+_danger_test foo "walias build 'rm -rf ./build'
+echo rc=\$?" "WE_DANGER_AUTOCONFIRM=n"
+ok "T25.8 confirm: rm -rf ./build cancelled" 'clean | grep -q "rc=1"'
+ok "T25.8 confirm: alias not created"        '! clean | grep -q "build is set to"'
+ok "T25.8 confirm: warning shown"            'clean | grep -q "WARNING"'
+
+# T25.9: safe – echo hello (no warning)
+_danger_test foo "walias hi 'echo hello'
+echo rc=\$?"
+ok "T25.9 safe: no warning"    '! clean | grep -q "WARNING\|REFUSED"'
+ok "T25.9 safe: rc=0"          'clean | grep -q "rc=0"'
+ok "T25.9 safe: alias created" 'clean | grep -q "hi is set to"'
+
+# T25.10: wfunc hard block – rm -rf /
+_danger_test foo "wfunc bad 'rm -rf /'
+echo rc=\$?"
+ok "T25.10 wfunc hard block: rm -rf / refused" 'clean | grep -q "REFUSED"'
+ok "T25.10 wfunc hard block: rc=1"             'clean | grep -q "rc=1"'
+
+# T25.11: wfunc confirm – rm -rf ./build (auto-confirm Y)
+_danger_test foo "wfunc clean 'rm -rf ./build'
+echo rc=\$?" "WE_DANGER_AUTOCONFIRM=Y"
+ok "T25.11 wfunc confirm: auto-confirmed" 'clean | grep -q "rc=0"'
+ok "T25.11 wfunc confirm: function created" 'clean | grep -q "clean is set to"'
+
+# T25.12: confirm – shutdown (auto-confirm Y)
+_danger_test foo "walias off 'shutdown -h now'
+echo rc=\$?" "WE_DANGER_AUTOCONFIRM=Y"
+ok "T25.12 confirm: shutdown confirmed" 'clean | grep -q "rc=0"'
+ok "T25.12 confirm: warning shown"      'clean | grep -q "WARNING"'
+
+# T25.13: confirm – chmod -R (auto-cancel n)
+_danger_test foo "walias fix 'chmod -R 755 /etc'
+echo rc=\$?" "WE_DANGER_AUTOCONFIRM=n"
+ok "T25.13 confirm: chmod -R cancelled" 'clean | grep -q "rc=1"'
+ok "T25.13 confirm: warning shown"      'clean | grep -q "WARNING"'
+
 # ============================================================================
 printf '\n========================================\n'
 printf 'TOTAL: pass=%d fail=%d\n' "$PASS" "$FAIL"
