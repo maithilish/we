@@ -178,9 +178,11 @@ not touch your real `~/.we`.
 
 ## AI-assisted development
 
-This project was developed using **Qwen 3.8 27B**, cross-referencing an
-existing v1 prototype. The AI handled the full v2 rewrite: architecture
-design, implementation, testing, and documentation.
+This project was developed using **Qwen 3.8 27B** running inside the
+**[Pi Coding Agent](https://github.com/earendil-works/pi-coding-agent)**
+harness, cross-referencing an existing v1 prototype. The AI handled the
+full v2 rewrite: architecture design, implementation, testing, and
+documentation.
 
 The codebase is intentionally small (two engine files, ~900 lines total) and
 well-commented, making it a good candidate for further AI-assisted
