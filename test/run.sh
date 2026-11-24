@@ -862,6 +862,98 @@ ok "T26.8 wfunc -d: other function intact" 'clean | grep -q "keep_ok"'
 ok "T26.8 wfunc -d: rc=0"                  'clean | grep -q "rc=0"'
 
 # ============================================================================
+# T27: walias/wcd name validation (regex)
+# ============================================================================
+printf '\n== T27 walias/wcd name validation ==\n'
+
+# T27.1: walias rejects name with regex special chars
+_danger_test foo "walias 'foo[bar]' 'echo hi'
+echo rc=\$?"
+ok "T27.1 walias: rejects name with [ ]" 'clean | grep -q "rc=1"'
+ok "T27.1 walias: error message"          'clean | grep -q "invalid alias name"'
+
+# T27.2: walias rejects name with glob chars
+_danger_test foo "walias 'foo*bar' 'echo hi'
+echo rc=\$?"
+ok "T27.2 walias: rejects name with *" 'clean | grep -q "rc=1"'
+
+# T27.3: walias rejects name starting with digit... wait, digits are allowed after first char
+# Actually the regex is ^[A-Za-z0-9][A-Za-z0-9._-]*$ so digits ARE allowed as first char
+# Let's test a name that starts with a hyphen (should be rejected)
+_danger_test foo "walias '-foo' 'echo hi'
+echo rc=\$?"
+ok "T27.3 walias: rejects name starting with -" 'clean | grep -q "rc=1"'
+
+# T27.4: wcd rejects name with regex special chars
+_danger_test foo "wcd 'foo[bar]'
+echo rc=\$?"
+ok "T27.4 wcd: rejects name with [ ]" 'clean | grep -q "rc=1"'
+ok "T27.4 wcd: error message"          'clean | grep -q "invalid name"'
+
+# T27.5: walias accepts valid name with dots and hyphens
+_danger_test foo "walias my-alias.v2 'echo ok'
+echo rc=\$?"
+ok "T27.5 walias: accepts my-alias.v2" 'clean | grep -q "rc=0"'
+
+# ============================================================================
+# T28: we del removes func file + validates name
+# ============================================================================
+printf '\n== T28 we del: func file + name validation ==\n'
+
+# T28.1: we del removes the func file
+_danger_test foo "wfunc myfunc 'echo hi'
+ls \$WE_DIR/we_foo_func 2>/dev/null && echo func_exists || echo func_gone
+we del foo
+ls \$WE_DIR/we_foo_func 2>/dev/null && echo func_exists || echo func_gone
+echo rc=\$?"
+ok "T28.1 we del: func file existed before" 'clean | grep -q "func_exists"'
+ok "T28.1 we del: func file removed after"  'clean | grep -q "func_gone"'
+ok "T28.1 we del: rc=0"                     'clean | grep -q "rc=0"'
+
+# T28.2: we del rejects invalid name (path traversal)
+_danger_test foo "we del '../../etc/passwd'
+echo rc=\$?"
+ok "T28.2 we del: rejects path traversal" 'clean | grep -q "rc=1"'
+ok "T28.2 we del: error message"          'clean | grep -q "invalid profile name"'
+
+# T28.3: we del rejects name with glob chars
+_danger_test foo "we del '*'
+echo rc=\$?"
+ok "T28.3 we del: rejects glob name" 'clean | grep -q "rc=1"'
+
+# ============================================================================
+# T29: we show validates name
+# ============================================================================
+printf '\n== T29 we show: name validation ==\n'
+
+# T29.1: we show rejects invalid name
+_danger_test foo "we show '../../etc/passwd'
+echo rc=\$?"
+ok "T29.1 we show: rejects path traversal" 'clean | grep -q "rc=1"'
+ok "T29.1 we show: error message"          'clean | grep -q "invalid profile name"'
+
+# T29.2: we show works with valid name
+_danger_test foo "we show foo
+echo rc=\$?"
+ok "T29.2 we show: valid name works" 'clean | grep -q "rc=0"'
+
+# ============================================================================
+# T30: danger check: rm -rf ~/* hard-blocked
+# ============================================================================
+printf '\n== T30 danger check: rm ~/* ==\n'
+
+# T30.1: rm -rf ~/* is hard-blocked
+_danger_test foo "walias bad 'rm -rf ~/*'
+echo rc=\$?"
+ok "T30.1 rm -rf ~/*: hard-blocked" 'clean | grep -q "rc=1"'
+ok "T30.1 rm -rf ~/*: error message" 'clean | grep -q "catastrophic"'
+
+# T30.2: rm -rf ~/ is hard-blocked (already tested in T25, but verify)
+_danger_test foo "walias bad 'rm -rf ~/'
+echo rc=\$?"
+ok "T30.2 rm -rf ~/: hard-blocked" 'clean | grep -q "rc=1"'
+
+# ============================================================================
 printf '\n========================================\n'
 printf 'TOTAL: pass=%d fail=%d\n' "$PASS" "$FAIL"
 printf '========================================\n'

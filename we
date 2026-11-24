@@ -37,7 +37,7 @@
 : "${WE_DIR:=$HOME/.we}"
 export WE_DIR
 
-WE_VERSION=2.2
+WE_VERSION=2.3
 
 mkdir -p -- "$WE_DIR/state" 2>/dev/null || {
     printf 'we: cannot create %s/state, is $HOME writable?\n' "$WE_DIR" >&2
@@ -467,8 +467,16 @@ _we_list() {
 
 _we_show() {
     local name=${1-}
-    if [ -z "$name" ] || [ ! -f "$WE_DIR/we_$name" ]; then
+    if [ -z "$name" ]; then
         printf 'we: show: usage: we show <profile>\n' >&2
+        return 1
+    fi
+    if ! _we_valid_name "$name"; then
+        printf 'we: show: invalid profile name: %s\n' "$name" >&2
+        return 1
+    fi
+    if [ ! -f "$WE_DIR/we_$name" ]; then
+        printf 'we: no such profile: %s\n' "$name" >&2
         return 1
     fi
     printf '== %s ==\n' "$WE_DIR/we_$name"
@@ -484,6 +492,10 @@ _we_del() {
     local name=${1-}
     if [ -z "$name" ]; then
         printf 'we: del: usage: we del <profile>\n' >&2
+        return 1
+    fi
+    if ! _we_valid_name "$name"; then
+        printf 'we: del: invalid profile name: %s\n' "$name" >&2
         return 1
     fi
     if [ ! -f "$WE_DIR/we_$name" ] && [ ! -f "$WE_DIR/we_${name}_alias" ]; then
@@ -503,7 +515,7 @@ _we_del() {
         y|Y|yes|YES) ;;
         *) printf 'we: aborted\n'; return 1 ;;
     esac
-    rm -f -- "$WE_DIR/we_$name" "$WE_DIR/we_${name}_alias"
+    rm -f -- "$WE_DIR/we_$name" "$WE_DIR/we_${name}_alias" "$WE_DIR/we_${name}_func"
     rm -f -- "$WE_DIR"/state/rc_${name}_* 2>/dev/null
     # v1 compat: drop an entry alias with this name from the base alias file
     if [ -f "$WE_DIR/we_alias" ]; then

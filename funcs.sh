@@ -105,7 +105,7 @@ _we_danger_check() {
     # rm targeting /, ~, /*, * or %  (any flag combination)
     #   matches:  rm -rf /   rm -fr ~   rm -r -f *   rm --recursive --force /
     #   skips:    rm -rf /tmp/build   rm file.txt   rm -rf ./build
-    if printf '%s' "$value" | grep -qE '\brm\b[[:space:]]+(-+[a-zA-Z-]+[[:space:]]+)*(/|~|~/|/\*|\*|%)([[:space:];|&)]|$)'; then
+    if printf '%s' "$value" | grep -qE '\brm\b[[:space:]]+(-+[a-zA-Z-]+[[:space:]]+)*(/|~|~/|~/\*|/\*|\*|%)([[:space:];|&)]|$)'; then
         _dc_refuse "catastrophic rm target" \
             "rm targeting /, ~, /*, or * permanently deletes the root filesystem, your home directory, or every file in the current directory. There is no trash bin, no undo, no recovery."
         return 1
@@ -242,8 +242,9 @@ walias() {
         printf '\tuse walias -d <name> to delete an alias\n'
         return 1
     fi
-    if [[ $name == *=* ]] || [[ $name == *" "* ]] || [[ $name == -* ]]; then
+    if ! [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
         printf 'walias: invalid alias name: %s\n' "$name" >&2
+        printf 'walias: names must match [A-Za-z0-9][A-Za-z0-9._-]*\n' >&2
         return 1
     fi
 
@@ -283,8 +284,9 @@ wcd() {
         printf 'usage: wcd <short name for this dir>\n'
         return 1
     fi
-    if [[ $name == *=* ]] || [[ $name == *" "* ]] || [[ $name == -* ]]; then
+    if ! [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
         printf 'wcd: invalid name: %s\n' "$name" >&2
+        printf 'wcd: names must match [A-Za-z0-9][A-Za-z0-9._-]*\n' >&2
         return 1
     fi
     local dir
