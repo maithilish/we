@@ -1,12 +1,18 @@
 # we — work-env profile manager for bash
 
-Suppose you are working with LLMs. Typically, you have to navigate to your /ai folder, spin up the llama.cpp server, and switch to your working directory. Repeating this setup every time is tedious. Instead, you can save these frequently used commands as alias shortcuts. The next time you work, simply switch to your ai environment to load and use your saved aliases instantly. Similarly, if you need to resize your /tmp folder, you don't have to look up the command every time—just save it as an alias inside an environment.
-
-Our tool lets you effortlessly manage your work environments, aliases, and bash functions in one place.
-
 Keep frequently-used aliases and functions in **named profiles**. Step into
 a profile by typing its name; step out with `exit`. Everything you create
 inside a profile is persisted and restored the next time you enter it.
+
+Suppose you are working on a Python project. Typically, you have to navigate to your project folder, 
+activate the virtual environment, and maybe start a local server. 
+Repeating this setup every time is tedious. Instead, you can save these frequently used commands as alias shortcuts. 
+The next time you work, simply switch to your project environment to load and use your saved aliases instantly. 
+Similarly, if you need to run a specific build command or clear caches, you don't have to look up the command 
+every time—just save it as an alias inside an environment.
+
+Our tool lets you effortlessly manage your work environments, aliases, and bash functions in one place.
+
 
 ```
 $ we foo              # create profile "foo"
