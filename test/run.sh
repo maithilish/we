@@ -796,6 +796,71 @@ echo rc=\$?" "WE_DANGER_AUTOCONFIRM=n"
 ok "T25.13 confirm: chmod -R cancelled" 'clean | grep -q "rc=1"'
 ok "T25.13 confirm: warning shown"      'clean | grep -q "WARNING"'
 
+# --- T26: walias -d / wfunc -d (delete) ------------------------------------
+section "T26 walias -d / wfunc -d"
+
+# T26.1: walias -d deletes a persisted alias
+_danger_test foo "walias tmp1 'echo hello'
+walias -d tmp1
+alias tmp1 2>/dev/null && echo still_exists || echo gone
+echo rc=\$?"
+ok "T26.1 walias -d: alias removed from shell" 'clean | grep -q "gone"'
+ok "T26.1 walias -d: confirmation shown"       'clean | grep -q "deleted"'
+# verify it is gone from the persistence file
+ok "T26.1 walias -d: removed from file"        '! grep -q "alias tmp1=" "$SANDBOX/.we/we_foo_alias"'
+
+# T26.2: walias -d on non-existent alias (graceful)
+_danger_test foo "walias -d nosuch
+ echo rc=\$?"
+ok "T26.2 walias -d: non-existent graceful" 'clean | grep -q "rc=0"'
+ok "T26.2 walias -d: no error"              '! clean | grep -qi "error"'
+
+# T26.3: walias -d with no name (usage)
+_danger_test foo "walias -d
+echo rc=\$?"
+ok "T26.3 walias -d: usage shown" 'clean | grep -q "usage"'
+ok "T26.3 walias -d: rc=1"        'clean | grep -q "rc=1"'
+
+# T26.4: wfunc -d deletes a persisted function
+_danger_test foo "wfunc tmpf 'echo hi'
+wfunc -d tmpf
+type tmpf 2>/dev/null && echo still_exists || echo gone
+echo rc=\$?"
+ok "T26.4 wfunc -d: function removed from shell" 'clean | grep -q "gone"'
+ok "T26.4 wfunc -d: confirmation shown"           'clean | grep -q "deleted"'
+# verify it is gone from the persistence file
+ok "T26.4 wfunc -d: removed from file"            '! grep -q "tmpf ()" "$SANDBOX/.we/we_foo_func"'
+
+# T26.5: wfunc -d on non-existent function (graceful)
+_danger_test foo "wfunc -d nosuch
+ echo rc=\$?"
+ok "T26.5 wfunc -d: non-existent graceful" 'clean | grep -q "rc=0"'
+ok "T26.5 wfunc -d: no error"              '! clean | grep -qi "error"'
+
+# T26.6: wfunc -d with no name (usage)
+_danger_test foo "wfunc -d
+echo rc=\$?"
+ok "T26.6 wfunc -d: usage shown" 'clean | grep -q "usage"'
+ok "T26.6 wfunc -d: rc=1"        'clean | grep -q "rc=1"'
+
+# T26.7: walias -d does not affect other aliases
+_danger_test foo "walias keep1 'echo keep'
+walias del1 'echo del'
+walias -d del1
+alias keep1 2>/dev/null && echo keep_ok || echo keep_gone
+echo rc=\$?"
+ok "T26.7 walias -d: other alias intact" 'clean | grep -q "keep_ok"'
+ok "T26.7 walias -d: rc=0"               'clean | grep -q "rc=0"'
+
+# T26.8: wfunc -d does not affect other functions
+_danger_test foo "wfunc keepf 'echo keep'
+wfunc delf 'echo del'
+wfunc -d delf
+type keepf 2>/dev/null && echo keep_ok || echo keep_gone
+echo rc=\$?"
+ok "T26.8 wfunc -d: other function intact" 'clean | grep -q "keep_ok"'
+ok "T26.8 wfunc -d: rc=0"                  'clean | grep -q "rc=0"'
+
 # ============================================================================
 printf '\n========================================\n'
 printf 'TOTAL: pass=%d fail=%d\n' "$PASS" "$FAIL"

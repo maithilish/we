@@ -214,10 +214,32 @@ _we_danger_check() {
 # ---------------------------------------------------------------------------
 walias() {
     local name=${1-}
+
+    # --- delete mode: walias -d <name> ---------------------------------
+    if [ "$name" = "-d" ] || [ "$name" = "--delete" ]; then
+        name=${2-}
+        if [ -z "$name" ]; then
+            printf 'usage: walias -d <alias name>\n'
+            return 1
+        fi
+        # remove from live shell
+        unalias -- "$name" 2>/dev/null
+        # remove from persistence file
+        local file
+        file=$(_we_profile_alias_file)
+        if _we_profile_alias_delete "$name"; then
+            printf '\n\t%s deleted (removed from %s)\n\n' "$name" "$file"
+        else
+            printf '\n\t%s deleted from shell (not found in %s)\n\n' "$name" "$file"
+        fi
+        return 0
+    fi
+
     if [ -z "$name" ] || [ $# -lt 2 ]; then
         printf 'usage: walias <alias name> <alias value>\n'
         printf '\tvalue can be any bash command or multiple commands\n'
         printf '\tenclose multi-word values in quotes\n'
+        printf '\tuse walias -d <name> to delete an alias\n'
         return 1
     fi
     if [[ $name == *=* ]] || [[ $name == *" "* ]] || [[ $name == -* ]]; then
@@ -274,6 +296,24 @@ wcd() {
 }
 
 # ---------------------------------------------------------------------------
+# _we_profile_alias_delete <name>
+#   atomically remove `alias <name>=...` from the profile alias file
+# ---------------------------------------------------------------------------
+_we_profile_alias_delete() {
+    local name=$1
+    local file tmp pat
+    file=$(_we_profile_alias_file)
+    [ -n "$file" ] || return 1
+    [ -f "$file" ] || return 0   # nothing to delete
+
+    pat=${name//./\.}   # escape dots
+    tmp=$(mktemp -- "${file}.tmp.XXXXXX" 2>/dev/null) || return 1
+    grep -v -E "^alias ${pat}=" "$file" > "$tmp" 2>/dev/null || : > "$tmp"
+    mv -- "$tmp" "$file" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # _we_profile_func_file
 #   echo the function file to persist into
 # ---------------------------------------------------------------------------
@@ -326,6 +366,35 @@ _we_profile_func_upsert() {
 }
 
 # ---------------------------------------------------------------------------
+# _we_profile_func_delete <name>
+#   atomically remove the `declare -f <name>` block from the func file.
+#   A block runs from its "name ()" header line to the next line that is
+#   exactly "}" (same logic as _we_profile_func_upsert).
+# ---------------------------------------------------------------------------
+_we_profile_func_delete() {
+    local name=$1
+    local file tmp line skip=0
+    file=$(_we_profile_func_file)
+    [ -n "$file" ] || return 1
+    [ -f "$file" ] || return 0   # nothing to delete
+
+    tmp=$(mktemp -- "${file}.tmp.XXXXXX" 2>/dev/null) || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [ "$skip" -eq 1 ]; then
+            [ "$line" = "}" ] && skip=0
+            continue
+        fi
+        if [[ $line =~ ^${name}\ \(\)[[:space:]]*$ ]]; then
+            skip=1
+            continue
+        fi
+        printf '%s\n' "$line"
+    done < "$file" > "$tmp"
+    mv -- "$tmp" "$file" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # wfunc <name> <body>
 #   define a function in this shell and persist it for the current profile
 #   (or the base function file when used outside a profile).
@@ -342,10 +411,32 @@ _we_profile_func_upsert() {
 # ---------------------------------------------------------------------------
 wfunc() {
     local name=${1-}
+
+    # --- delete mode: wfunc -d <name> ----------------------------------
+    if [ "$name" = "-d" ] || [ "$name" = "--delete" ]; then
+        name=${2-}
+        if [ -z "$name" ]; then
+            printf 'usage: wfunc -d <name>\n'
+            return 1
+        fi
+        # remove from live shell
+        unset -f -- "$name" 2>/dev/null
+        # remove from persistence file
+        local file
+        file=$(_we_profile_func_file)
+        if _we_profile_func_delete "$name"; then
+            printf '\n\t%s deleted (removed from %s)\n\n' "$name" "$file"
+        else
+            printf '\n\t%s deleted from shell (not found in %s)\n\n' "$name" "$file"
+        fi
+        return 0
+    fi
+
     if [ -z "$name" ] || [ $# -lt 2 ]; then
         printf 'usage: wfunc <name> <body>\n'
         printf '\tbody is the function body; quote it (multi-line ok)\n'
         printf '\te.g. wfunc hi "echo hello"\n'
+        printf '\tuse wfunc -d <name> to delete a function\n'
         return 1
     fi
     if ! [[ $name =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
