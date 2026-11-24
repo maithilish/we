@@ -40,7 +40,7 @@ Base-shell aliases and functions are inherited by every profile.
   Commands typed in any profile appear in the base shell and every other
   terminal at the next prompt. Live cross-terminal sync via
   `PROMPT_COMMAND` (never clobbers an existing one).
-- **Safe lifecycle** — per-session cleanup on exit, root-snapshot cleanup on
+- **Safe lifecycle** — per-session cleanup on exit, base-snapshot cleanup on
   base-shell exit, 1-day sweep as backstop. Never clobbers a user's `EXIT`
   trap.
 - **Idempotent** — re-sourcing `~/.we/we` is safe.

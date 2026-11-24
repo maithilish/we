@@ -31,11 +31,11 @@ All runtime data lives under `$WE_DIR` (default `~/.we`).
   we_<name>_alias     persisted aliases for profile <name>
   we_<name>_func      persisted functions for profile <name>
   state/              transient per-session files (auto-managed)
-    root_<sid>.vars   base shell variable snapshot
-    root_<sid>.funcs  base shell function snapshot
-    root_<sid>.aliases base shell alias snapshot
-    root_<sid>.shopt  base shell shopt snapshot
-    root_<sid>.cwd    base shell working directory
+    base_<sid>.vars   base shell variable snapshot
+    base_<sid>.funcs  base shell function snapshot
+    base_<sid>.aliases base shell alias snapshot
+    base_<sid>.shopt  base shell shopt snapshot
+    base_<sid>.cwd    base shell working directory
     rc_<prof>_<sid>   generated rcfile for a profile session
     <sid>.pre         alias baseline at profile entry
     <sid>.cur         alias state at profile exit
@@ -60,8 +60,8 @@ When `~/.bashrc` runs `source ~/.we/we`:
 6. `_we_register_all_profiles` defines a bash **function** for each existing
    profile: `foo() { we_enter 'foo'; }`. Functions are used (not aliases) so
    profile names never clash with user aliases.
-7. If the user has no `EXIT` trap, `_we_root_cleanup` is installed to remove
-   this base shell's `root_*` snapshot files on exit.
+7. If the user has no `EXIT` trap, `_we_base_cleanup` is installed to remove
+   this base shell's `base_*` snapshot files on exit.
 
 ### 2. First entry (base → profile)
 
@@ -69,10 +69,10 @@ Typing `foo` in the base shell calls `we_enter foo`:
 
 1. **Root snapshot** is taken: the base shell's variables, functions,
    aliases, shopt state, and working directory are written to
-   `state/root_<sid>.*`. The sid is `<BASHPID>_<PID>` — stable for the
+   `state/base_<sid>.*`. The sid is `<BASHPID>_<PID>` — stable for the
    lifetime of the base shell, so re-entry refreshes the same files.
 2. A **rcfile** is rendered (`state/rc_foo_<sess_sid>`) that:
-   - restores the root snapshot (vars, funcs, aliases, shopt, cwd)
+   - restores the base snapshot (vars, funcs, aliases, shopt, cwd)
    - runs `history -c` + `history -r` (shared history)
    - takes an alias baseline (`state/<sid>.pre`)
    - sources `we_foo` (profile setup) and `we_foo_alias` (persisted aliases)
@@ -97,7 +97,7 @@ Typing `bar` while inside `foo` calls `we_enter bar`, which detects
 2. The outgoing session's files are removed.
 3. `history -a` flushes the outgoing profile's commands (the `EXIT` trap
    won't fire on `exec`).
-4. A new rcfile is rendered that restores the **root** snapshot (base state,
+4. A new rcfile is rendered that restores the **base** snapshot (base state,
    not `foo`'s state).
 5. `exec bash --rcfile <new_rc>` replaces the process. The same PID becomes
    the new profile.
@@ -105,7 +105,7 @@ Typing `bar` while inside `foo` calls `we_enter bar`, which detects
 Key properties:
 - **Replace, not nest**: `foo → bar` is an `exec`, not a child process.
   `exit` from `bar` goes to the base shell, not back to `foo`.
-- **Base state, not intermediate**: the new profile restores the root
+- **Base state, not intermediate**: the new profile restores the base
   snapshot, so `bar` sees the base environment, not `foo`'s modifications.
 - **Generation counter**: `WE_SESSION_GEN` increments on every switch so
   session files (`rc_*`, `*.pre`, `*.cur`) stay unique across `exec`'d
@@ -119,7 +119,7 @@ Three layers of cleanup:
 |---|---|---|
 | child `EXIT` trap | persist aliases, remove `rc_*`, `*.pre`, `*.cur` | every profile exit |
 | parent `rm` fallback | remove the same files | after `bash --rcfile` returns (covers SIGKILL) |
-| base `EXIT` trap | remove `root_*` files | base shell exit (only if user has no own `EXIT` trap) |
+| base `EXIT` trap | remove `base_*` files | base shell exit (only if user has no own `EXIT` trap) |
 | 1-day sweep | `find state/ -mmin +1440 -delete` | every source of `we` (backstop) |
 
 ---
@@ -140,7 +140,7 @@ Three layers of cleanup:
   session-only aliases (defined with plain `alias`) are captured, while
   aliases inherited from the base are not duplicated.
 - **Base aliases are universal**: a `walias` in the base shell persists to
-  `we_alias` and is inherited by every profile via the root snapshot. A
+  `we_alias` and is inherited by every profile via the base snapshot. A
   profile can shadow a base alias: `walias` in the profile persists a
   per-profile override; plain `alias` is session-only.
 
@@ -207,16 +207,16 @@ v2 uses functions: `foo() { we_enter 'foo'; }`. Functions have lower
 precedence than aliases (so a user alias can intentionally shadow a profile
 name), work in all contexts, and are cleanly removable with `unset -f`.
 
-### Why a root snapshot, not per-entry snapshots
+### Why a base snapshot, not per-entry snapshots
 
 The first design took a fresh snapshot on every profile entry. This broke
 profile-to-profile switching: `foo → bar` would restore `foo`'s state
-instead of the base state. The root snapshot is taken **once** on the first
+instead of the base state. The base snapshot is taken **once** on the first
 entry from the base shell and is what every profile (and every switch)
 restores from. This gives the correct "replace" semantics: `bar` always
 sees the base environment.
 
-The root snapshot is keyed to the base shell's PID (`<BASHPID>_<PID>`), so
+The base snapshot is keyed to the base shell's PID (`<BASHPID>_<PID>`), so
 re-entry from the same base shell refreshes the same files (no accumulation).
 A new base shell (new terminal) gets a new sid.
 
@@ -232,7 +232,7 @@ must persist its aliases and flush history **before** the `exec`.
 
 ### Why a generation counter
 
-`exec` preserves the PID, so the session sid (`<root_sid>_g<gen>`) would
+`exec` preserves the PID, so the session sid (`<base_sid>_g<gen>`) would
 collide across switches without the generation counter. `WE_SESSION_GEN`
 increments on every switch, keeping session files unique.
 
@@ -248,7 +248,7 @@ during development (the "extglob syntax error" fix).
 
 Chaining `EXIT` traps in bash is fragile (the old trap is lost unless you
 manually capture and re-invoke it). `we` checks `trap -p EXIT` before
-installing `_we_root_cleanup`. If the user has their own `EXIT` trap, `we`
+installing `_we_base_cleanup`. If the user has their own `EXIT` trap, `we`
 skips the install and relies on the 1-day sweep for cleanup.
 
 ### Why `mktemp` + `mv` for file writes
@@ -293,7 +293,7 @@ read it at startup — before the rcfile runs. This would load the wrong
 history (the default `~/.bash_history` if `HISTFILE` isn't set yet, or a
 stale version). By keeping `HISTFILE` non-exported, the exec'd bash uses
 the default at startup, and the rcfile's `history -c` + `history -r`
-correctly loads the shared history after the root snapshot restores
+correctly loads the shared history after the base snapshot restores
 `HISTFILE`.
 
 ---
@@ -432,9 +432,9 @@ Key test groups:
 | T6 | state/ cleanup after exit |
 | T7 | `we del` |
 | T8 | profile-to-profile switching (replace/exec) |
-| T9 | root snapshot cleanup on base exit |
+| T9 | base snapshot cleanup on base exit |
 | T10 | same-profile switch (no alias doubling) |
-| T11 | root snapshot deleted → switch refused |
+| T11 | base snapshot deleted → switch refused |
 | T12 | profile creation inside a profile |
 | T13 | long switch chain (generation counter) |
 | T14 | refuse to delete the current profile |
@@ -457,6 +457,6 @@ Run: `bash test/run.sh` (exit 0 = all green).
 
 | version | changes |
 |---|---|
-| 2.0 | initial v2 engine (root snapshot, exec switching, lifecycle) |
+| 2.0 | initial v2 engine (base snapshot, exec switching, lifecycle) |
 | 2.1 | edge cases & hardening (extglob fix, name validation, state sweep) |
 | 2.2 | A0 (universal base walias), A1 (wfunc), A2 (shared history) |

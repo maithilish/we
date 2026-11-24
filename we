@@ -15,7 +15,7 @@
 #   $WE_DIR/we_<name>           profile setup script for profile <name>
 #   $WE_DIR/we_<name>_alias     persisted aliases for profile <name>
 #   $WE_DIR/we_<name>_func      persisted functions for profile <name>
-#   $WE_DIR/state/              root snapshots, per-session files, rcfiles
+#   $WE_DIR/state/              base snapshots, per-session files, rcfiles
 #                               (auto-managed)
 #
 # Usage:
@@ -115,7 +115,7 @@ _we_register_all_profiles() {
 # ---------------------------------------------------------------------------
 we_enter() {
     local prof=${1-}
-    local rc root_sid sess_sid gen
+    local rc base_sid sess_sid gen
     if [ -z "$prof" ]; then
         printf 'we: internal error: we_enter called without profile name\n' >&2
         return 1
@@ -127,48 +127,48 @@ we_enter() {
     [ -f "$WE_DIR/we_${prof}_alias" ] || : > "$WE_DIR/we_${prof}_alias"
 
     # --- SWITCH: entered from inside a profile ------------------------------
-    # WE_ROOT_SID is set only in profile shells (the base shell never has it).
-    # Restore the BASE (root) state, persist the current profile, and exec into
+    # WE_BASE_SID is set only in profile shells (the base shell never has it).
+    # Restore the BASE state, persist the current profile, and exec into
     # the new one. _we_switch does not return on success (it execs); a return
-    # here means it failed (e.g. the root snapshot is missing).
-    if [ -n "${WE_ROOT_SID-}" ]; then
+    # here means it failed (e.g. the base snapshot is missing).
+    if [ -n "${WE_BASE_SID-}" ]; then
         _we_switch "$prof"
         return 1
     fi
 
-    # --- first entry: capture the base shell as a durable root snapshot ------
-    # The snapshot is keyed to the base shell (root_sid) and is what every
+    # --- first entry: capture the base shell as a durable base snapshot ------
+    # The snapshot is keyed to the base shell (base_sid) and is what every
     # profile in this lineage restores from, so a profile entered later from
     # inside another profile gets the BASE state, not the intermediate
     # profile's. The base shell's PID is constant for its lifetime, so
-    # re-entry from the same base shell refreshes the same root files instead
+    # re-entry from the same base shell refreshes the same base files instead
     # of accumulating new ones.
-    root_sid="${BASHPID}_$$"
+    base_sid="${BASHPID}_$$"
     gen=1
-    sess_sid="${root_sid}_g${gen}"
+    sess_sid="${base_sid}_g${gen}"
 
     # shell options: functions may contain extglob patterns which are a
     # syntax error to parse with extglob off, so the child restores the
     # parent's shopt state (see _we_render_rc).
-    ( shopt -p ) > "$WE_DIR/state/root_${root_sid}.shopt" 2>/dev/null || : > "$WE_DIR/state/root_${root_sid}.shopt"
+    ( shopt -p ) > "$WE_DIR/state/base_${base_sid}.shopt" 2>/dev/null || : > "$WE_DIR/state/base_${base_sid}.shopt"
 
     # aliases: plain `alias` output is re-sourcing safe
-    ( alias ) > "$WE_DIR/state/root_${root_sid}.aliases" 2>/dev/null || : > "$WE_DIR/state/root_${root_sid}.aliases"
+    ( alias ) > "$WE_DIR/state/base_${base_sid}.aliases" 2>/dev/null || : > "$WE_DIR/state/base_${base_sid}.aliases"
 
     # functions: `declare -f` output is re-sourcing safe
-    ( declare -f ) > "$WE_DIR/state/root_${root_sid}.funcs" 2>/dev/null || : > "$WE_DIR/state/root_${root_sid}.funcs"
+    ( declare -f ) > "$WE_DIR/state/base_${base_sid}.funcs" 2>/dev/null || : > "$WE_DIR/state/base_${base_sid}.funcs"
 
     # non-exported, non-readonly variables (exported ones are inherited by the
     # child process automatically; readonly/special vars would error on reset)
-    _we_snapshot_vars > "$WE_DIR/state/root_${root_sid}.vars" 2>/dev/null || : > "$WE_DIR/state/root_${root_sid}.vars"
+    _we_snapshot_vars > "$WE_DIR/state/base_${base_sid}.vars" 2>/dev/null || : > "$WE_DIR/state/base_${base_sid}.vars"
 
     # base working directory: PWD is a special var excluded from the vars
     # snapshot; store a ready-to-source cd line (quoted so spaces survive)
-    printf 'cd %q 2>/dev/null\n' "$PWD" > "$WE_DIR/state/root_${root_sid}.cwd"
+    printf 'cd %q 2>/dev/null\n' "$PWD" > "$WE_DIR/state/base_${base_sid}.cwd"
 
     # --- render the profile rcfile ------------------------------------------
     rc="$WE_DIR/state/rc_${prof}_${sess_sid}"
-    _we_render_rc "$prof" "$root_sid" "$sess_sid" "$gen" "$rc" || return 1
+    _we_render_rc "$prof" "$base_sid" "$sess_sid" "$gen" "$rc" || return 1
 
     # --- start the profile subshell ------------------------------------------
     # stdin is a terminal -> normal interactive child bash
@@ -182,7 +182,7 @@ we_enter() {
 
     # child is back. Its EXIT trap has already persisted profile aliases and
     # removed this session's files; the rm below is a fallback for the case
-    # the child died without running its trap (e.g. SIGKILL). The root
+    # the child died without running its trap (e.g. SIGKILL). The base
     # snapshot stays for re-entry.
     rm -f -- "$rc" "$WE_DIR/state/${sess_sid}.pre" "$WE_DIR/state/${sess_sid}.cur" 2>/dev/null
     return 0
@@ -190,19 +190,19 @@ we_enter() {
 
 # ---------------------------------------------------------------------------
 # _we_switch <profile>
-#   Called from we_enter when WE_ROOT_SID is set (i.e. we are inside a
+#   Called from we_enter when WE_BASE_SID is set (i.e. we are inside a
 #   profile). Persists the current profile's session aliases, cleans up its
-#   session files, renders a fresh rcfile that restores the BASE (root)
+#   session files, renders a fresh rcfile that restores the BASE
 #   snapshot, and execs into the new profile. Does not return on success.
 # ---------------------------------------------------------------------------
 _we_switch() {
     local prof=$1
-    local root_sid gen sess_sid rc f missing=0
-    root_sid="$WE_ROOT_SID"
+    local base_sid gen sess_sid rc f missing=0
+    base_sid="$WE_BASE_SID"
 
-    # the root snapshot must be present to switch from
+    # the base snapshot must be present to switch from
     for f in vars funcs aliases shopt cwd; do
-        [ -f "$WE_DIR/state/root_${root_sid}.${f}" ] || missing=1
+        [ -f "$WE_DIR/state/base_${base_sid}.${f}" ] || missing=1
     done
     if [ "$missing" -eq 1 ]; then
         printf 'we: cannot switch to %s: the base snapshot is missing.\n' "$prof" >&2
@@ -218,13 +218,13 @@ _we_switch() {
             "$WE_DIR/state/${WE_SESSION_SID-}.cur" \
             "$WE_DIR/state/rc_${WE_PROFILE-}_${WE_SESSION_SID-}" 2>/dev/null
 
-    # new session identity: same root, next generation (exec preserves the
+    # new session identity: same base, next generation (exec preserves the
     # PID, so the generation is what keeps session files unique)
     gen=$(( ${WE_SESSION_GEN:-1} + 1 ))
-    sess_sid="${root_sid}_g${gen}"
+    sess_sid="${base_sid}_g${gen}"
 
     rc="$WE_DIR/state/rc_${prof}_${sess_sid}"
-    _we_render_rc "$prof" "$root_sid" "$sess_sid" "$gen" "$rc" || return 1
+    _we_render_rc "$prof" "$base_sid" "$sess_sid" "$gen" "$rc" || return 1
 
     # flush this profile's history to the shared file before exec: exec
     # replaces the process without running the EXIT trap, so the prompt-based
@@ -274,36 +274,36 @@ _we_snapshot_vars() {
 }
 
 # ---------------------------------------------------------------------------
-# _we_render_rc <profile> <root_sid> <sess_sid> <gen> <rcfile>
+# _we_render_rc <profile> <base_sid> <sess_sid> <gen> <rcfile>
 # ---------------------------------------------------------------------------
 _we_render_rc() {
-    local prof=$1 root_sid=$2 sess_sid=$3 gen=$4 rc=$5
+    local prof=$1 base_sid=$2 sess_sid=$3 gen=$4 rc=$5
     cat > "$rc" <<WE_RC_EOF
 # we: rcfile for profile '$prof' (generated, do not edit)
 shopt -s expand_aliases
 WE_DIR='$WE_DIR'
 WE_PROFILE='$prof'
 export WE_PROFILE
-# lineage markers: the root snapshot this shell restores from, this session's
+# lineage markers: the base snapshot this shell restores from, this session's
 # own id (pre/cur baseline files, exit-save), and the session generation
 # (bumped on each switch so session files stay unique across exec'd sessions)
-WE_ROOT_SID='$root_sid'
+WE_BASE_SID='$base_sid'
 WE_SESSION_SID='$sess_sid'
 WE_SESSION_GEN='$gen'
-export WE_ROOT_SID WE_SESSION_SID WE_SESSION_GEN
+export WE_BASE_SID WE_SESSION_SID WE_SESSION_GEN
 
-# 1) inherit base shell state (root snapshot taken at first entry).
+# 1) inherit base shell state (base snapshot taken at first entry).
 #    extglob is forced on while parsing the snapshots: functions sourced from
 #    the parent may contain extglob patterns (e.g. bash-completion), which
 #    are a syntax error to parse with extglob off. The parent's exact shopt
 #    state is restored right afterwards, so interactive behaviour matches.
 shopt -s extglob
-[ -f "$WE_DIR/state/root_${root_sid}.vars" ]     && . "$WE_DIR/state/root_${root_sid}.vars"
-[ -f "$WE_DIR/state/root_${root_sid}.funcs" ]    && . "$WE_DIR/state/root_${root_sid}.funcs"
-[ -f "$WE_DIR/state/root_${root_sid}.aliases" ]  && . "$WE_DIR/state/root_${root_sid}.aliases"
-[ -f "$WE_DIR/state/root_${root_sid}.shopt" ]    && . "$WE_DIR/state/root_${root_sid}.shopt"
+[ -f "$WE_DIR/state/base_${base_sid}.vars" ]     && . "$WE_DIR/state/base_${base_sid}.vars"
+[ -f "$WE_DIR/state/base_${base_sid}.funcs" ]    && . "$WE_DIR/state/base_${base_sid}.funcs"
+[ -f "$WE_DIR/state/base_${base_sid}.aliases" ]  && . "$WE_DIR/state/base_${base_sid}.aliases"
+[ -f "$WE_DIR/state/base_${base_sid}.shopt" ]    && . "$WE_DIR/state/base_${base_sid}.shopt"
 # restore the base working directory (PWD is a special var, stored separately)
-[ -f "$WE_DIR/state/root_${root_sid}.cwd" ]      && . "$WE_DIR/state/root_${root_sid}.cwd"
+[ -f "$WE_DIR/state/base_${base_sid}.cwd" ]      && . "$WE_DIR/state/base_${base_sid}.cwd"
 
 # 1b) shared history: reload the history file now that the snapshot has
 #     restored the base shell's HISTFILE (a fresh exec'd bash may have read
@@ -321,7 +321,7 @@ alias > "\$WE_DIR/state/${sess_sid}.pre" 2>/dev/null || : > "\$WE_DIR/state/${se
 [ -f "\$WE_DIR/we_$prof" ]          && . "\$WE_DIR/we_$prof"
 [ -f "\$WE_DIR/we_${prof}_alias" ]  && . "\$WE_DIR/we_${prof}_alias"
 
-# 4) profile functions (persisted via wfunc; override base/root functions)
+# 4) profile functions (persisted via wfunc; override base functions)
 [ -f "\$WE_DIR/we_${prof}_func" ]   && . "\$WE_DIR/we_${prof}_func"
 
 # 5) profile tools: walias, wcd, wfunc (persist into we_${prof}_alias / _func)
@@ -441,7 +441,7 @@ _we_create() {
 
     # created from inside a profile: the entry command is only registered in
     # THIS shell (the base shell never saw it), so say so explicitly
-    if [ -n "${WE_ROOT_SID-}" ]; then
+    if [ -n "${WE_BASE_SID-}" ]; then
         printf '\t - note: created inside profile %s, so %s is only available in this shell.\n' "${WE_PROFILE-}" "$name"
         printf '\t   exit to the base shell (or re-source $WE_DIR/we) to use %s there.\n' "$name"
     fi
@@ -563,35 +563,35 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# _we_root_cleanup <root_sid>
-#   Remove this base shell's root snapshot files. Installed as the base
-#   shell's EXIT trap so the root_* files don't linger after the shell exits;
+# _we_base_cleanup <base_sid>
+#   Remove this base shell's base snapshot files. Installed as the base
+#   shell's EXIT trap so the base_* files don't linger after the shell exits;
 #   the 1-day sweep at source time is the backstop for shells that die without
 #   running their trap (e.g. SIGKILL).
 # ---------------------------------------------------------------------------
-_we_root_cleanup() {
+_we_base_cleanup() {
     local sid=${1-}
     [ -n "$sid" ] || return 0
-    rm -f -- "$WE_DIR"/state/root_"${sid}".* 2>/dev/null
+    rm -f -- "$WE_DIR"/state/base_"${sid}".* 2>/dev/null
     return 0
 }
 
 # --- register entry commands for all existing profiles ----------------------
 _we_register_all_profiles
 
-# --- root snapshot cleanup on base-shell exit --------------------------------
-# Keyed to this base shell's PID (== the root_sid we_enter computes on first
+# --- base snapshot cleanup on base-shell exit --------------------------------
+# Keyed to this base shell's PID (== the base_sid we_enter computes on first
 # entry). We only install the trap when the user has no EXIT trap of their
 # own: chaining EXIT traps in bash is fragile, and the sweep covers the rest.
-_we_base_root_sid="${BASHPID}_$$"
+_we_base_sid="${BASHPID}_$$"
 if [ -z "$(trap -p EXIT 2>/dev/null)" ]; then
-    trap '_we_root_cleanup "'"$_we_base_root_sid"'"' EXIT
+    trap '_we_base_cleanup "'"$_we_base_sid"'"' EXIT
 fi
 
 # export the interface (and its closure) so child scripts/shells can use it
 export -f we we_enter _we_switch _we_create _we_list _we_show _we_del _we_help \
            _we_valid_name _we_profiles _we_register_profile \
            _we_register_all_profiles _we_snapshot_vars _we_render_rc \
-           _we_root_cleanup 2>/dev/null
+           _we_base_cleanup 2>/dev/null
 
 return 0 2>/dev/null || true

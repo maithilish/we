@@ -18,7 +18,7 @@ set -u
 shopt -s extglob 2>/dev/null || true
 # start from a clean base: drop any lineage markers inherited from the
 # surrounding environment so the "base shell" subshells are truly base
-unset WE_ROOT_SID WE_SESSION_SID WE_PROFILE 2>/dev/null || true
+unset WE_BASE_SID WE_SESSION_SID WE_PROFILE 2>/dev/null || true
 
 REPO=$(cd -- "$(dirname -- "$0")/.." && pwd)
 SANDBOX=${WE_TEST_SANDBOX:-/tmp/we_sandbox}
@@ -219,12 +219,12 @@ ok "wcd with spaces persisted" "grep -q \"^alias sp='cd\" '$SANDBOX/.we/we_foo5_
 ok "wcd spaces value correct"  "grep -qF \"dir with space\" '$SANDBOX/.we/we_foo5_alias'"
 
 # --- T6: state/ cleanup after exit -------------------------------------------
-# Phase 1+: root snapshots persist after exit (kept for re-entry / Phase 2
+# Phase 1+: base snapshots persist after exit (kept for re-entry / Phase 2
 # switching); per-session files (rc, pre, cur) must be gone.
 section "T6 state cleanup"
 ok "no session rc files left"      '[ -z "$(ls "$SANDBOX/.we/state"/rc_* 2>/dev/null)" ]'
 ok "no session pre/cur files left" '[ -z "$(ls "$SANDBOX/.we/state"/*.pre "$SANDBOX/.we/state"/*.cur 2>/dev/null)" ]'
-ok "only root_* files remain"      '[ -z "$(ls -A "$SANDBOX/.we/state" 2>/dev/null | grep -v "^root_")" ]'
+ok "only base_* files remain"      '[ -z "$(ls -A "$SANDBOX/.we/state" 2>/dev/null | grep -v "^base_")" ]'
 
 # --- T7: we del ---------------------------------------------------------------
 section "T7 delete"
@@ -282,12 +282,12 @@ ok "swt restored base dir"         "clean | grep -q \"swt_pwd=$SANDBOX\$\""
 ok "swf alias persisted pre-switch" "grep -q \"^alias swfonly='echo swfonly'\" '$SANDBOX/.we/we_swf_alias'"
 ok "swt alias persisted"           "grep -q \"^alias swtonly='echo swtonly'\" '$SANDBOX/.we/we_swt_alias'"
 ok "swt file has no swfonly"       "! grep -q swfonly '$SANDBOX/.we/we_swt_alias'"
-ok "state clean after switch"      '[ -z "$(ls -A "$SANDBOX/.we/state" 2>/dev/null | grep -v "^root_")" ]'
+ok "state clean after switch"      '[ -z "$(ls -A "$SANDBOX/.we/state" 2>/dev/null | grep -v "^base_")" ]'
 
-# --- T9: root snapshot cleanup on base-shell exit ---------------------------
-# The base shell's EXIT trap removes its root_* files, so the state dir is
+# --- T9: base snapshot cleanup on base-shell exit ---------------------------
+# The base shell's EXIT trap removes its base_* files, so the state dir is
 # empty once the base shell (here: the test subshell) has exited.
-section "T9 root cleanup on base exit"
+section "T9 base cleanup on base exit"
 (
     cd -- "$SANDBOX" || exit 99
     export WE_DIR="$SANDBOX/.we"
@@ -323,13 +323,13 @@ ok "s2 has keepme (persisted)" 'clean | grep -q "s2_keepme=alias"'
 ok "s2 has base alias"         'clean | grep -q "s2_baseal=alias"'
 ok "no alias doubling"         '[ "$(grep -c "^alias keepme=" "$SANDBOX/.we/we_foo10_alias")" = 1 ]'
 
-# --- T11: root snapshot deleted -> switch refused ---------------------------
+# --- T11: base snapshot deleted -> switch refused ---------------------------
 # With the base snapshot gone, a switch is refused and the user stays in the
 # current profile (no exec).
-section "T11 root snapshot deleted"
+section "T11 base snapshot deleted"
 cat > "$SANDBOX/t11_inner.sh" <<'EOF'
-rm -f "$WE_DIR"/state/root_*.vars "$WE_DIR"/state/root_*.funcs \
-      "$WE_DIR"/state/root_*.aliases "$WE_DIR"/state/root_*.shopt "$WE_DIR"/state/root_*.cwd
+rm -f "$WE_DIR"/state/base_*.vars "$WE_DIR"/state/base_*.funcs \
+      "$WE_DIR"/state/base_*.aliases "$WE_DIR"/state/base_*.shopt "$WE_DIR"/state/base_*.cwd
 bar11
 echo "still_in=$WE_PROFILE"
 EOF
@@ -342,7 +342,7 @@ EOF
     we bar11 >/dev/null 2>&1
     foo11
 ) < "$SANDBOX/t11_inner.sh" > "$CAPTURE" 2>&1
-ok "switch refused (no root)"  'clean | grep -q "cannot switch to bar11"'
+ok "switch refused (no base)"  'clean | grep -q "cannot switch to bar11"'
 ok "stayed in foo11"           'clean | grep -q "still_in=foo11"'
 
 # --- T12: profile creation inside a profile ---------------------------------
@@ -391,7 +391,7 @@ ok "gen a=1"                   'clean | grep -q "gen_a=1"'
 ok "gen b=2"                   'clean | grep -q "gen_b=2"'
 ok "gen c=3"                   'clean | grep -q "gen_c=3"'
 ok "gen d=4"                   'clean | grep -q "gen_d=4"'
-ok "state clean after chain"   '[ -z "$(ls -A "$SANDBOX/.we/state" 2>/dev/null | grep -v "^root_")" ]'
+ok "state clean after chain"   '[ -z "$(ls -A "$SANDBOX/.we/state" 2>/dev/null | grep -v "^base_")" ]'
 
 # --- T14: refuse to delete the current profile ------------------------------
 section "T14 del current profile guard"
@@ -439,7 +439,7 @@ ok "not duplicated into foo15"    '! grep -q "^alias n=" "$SANDBOX/.we/we_foo15_
 ok "not duplicated into bar15"    '! grep -q "^alias n=" "$SANDBOX/.we/we_bar15_alias"'
 
 # --- T16: base alias change seen on re-entry (A0) ---------------------------
-# The root snapshot is re-taken on every first entry from the base, so a base
+# The base snapshot is re-taken on every first entry from the base, so a base
 # alias changed between two entries is seen at its new value on re-entry.
 section "T16 base alias change on re-entry"
 cat > "$SANDBOX/t16_in1.sh" <<'EOF'
@@ -671,7 +671,7 @@ EOF
     cd -- "$SANDBOX" || exit 99
     export WE_DIR="$SANDBOX/.we"
     # HISTFILE is set but NOT exported: the exec'd profile bash does not
-    # inherit it, so the rcfile's history -r (after the root snapshot restores
+    # inherit it, so the rcfile's history -r (after the base snapshot restores
     # HISTFILE) is the only path by which the profile sees the base history.
     HISTFILE="$T24_HIST"
     . "$WE_DIR/we"

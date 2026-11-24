@@ -37,12 +37,12 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 - `we` — CLI dispatcher (create, ls, show, del, help, -v)
 - `we_enter <prof>` — first-entry (snapshot + child bash) or switch (delegates to `_we_switch`)
 - `_we_switch <prof>` — profile-to-profile replace via `exec`; persists outgoing, flushes history, renders new rcfile, `exec bash --rcfile`
-- `_we_render_rc <prof> <root_sid> <sess_sid> <gen> <rc>` — generates the profile rcfile (unquoted heredoc; restores root snapshot, sources profile files, installs EXIT trap, chains history sync)
+- `_we_render_rc <prof> <base_sid> <sess_sid> <gen> <rc>` — generates the profile rcfile (unquoted heredoc; restores base snapshot, sources profile files, installs EXIT trap, chains history sync)
 - `_we_snapshot_vars` — iterates `compgen -v`, emits `declare -p` lines for non-exported, non-readonly, non-special vars
 - `_we_create <name>` — creates `we_<name>`, `we_<name>_alias`, `we_<name>_func`; validates name; refuses builtin/command names
 - `_we_register_profile <name>` — defines `name() { we_enter 'name'; }`; unaliases any shadowing alias
 - `_we_register_all_profiles` — calls `_we_register_profile` for each existing profile
-- `_we_root_cleanup <sid>` — removes `root_<sid>.*` files; installed as base-shell EXIT trap only if user has none
+- `_we_base_cleanup <sid>` — removes `base_<sid>.*` files; installed as base-shell EXIT trap only if user has none
 - `_we_valid_name <name>` — regex `^[A-Za-z0-9][A-Za-z0-9._-]*$`, rejects `we`, `alias`
 - `_we_profiles` — lists profile names from `we_*` files, skips `alias`, `func`, `*_alias`, `*_func`
 - `_we_list`, `_we_show <name>`, `_we_del <name>` — management commands
@@ -66,22 +66,22 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 
 | file | content | lifetime |
 |---|---|---|
-| `root_<sid>.vars` | `declare -p` lines for non-exported vars | base shell lifetime |
-| `root_<sid>.funcs` | `declare -f` output (all functions) | base shell lifetime |
-| `root_<sid>.aliases` | `alias` output (all aliases) | base shell lifetime |
-| `root_<sid>.shopt` | `shopt -p` output | base shell lifetime |
-| `root_<sid>.cwd` | `cd <quoted-pwd>` | base shell lifetime |
+| `base_<sid>.vars` | `declare -p` lines for non-exported vars | base shell lifetime |
+| `base_<sid>.funcs` | `declare -f` output (all functions) | base shell lifetime |
+| `base_<sid>.aliases` | `alias` output (all aliases) | base shell lifetime |
+| `base_<sid>.shopt` | `shopt -p` output | base shell lifetime |
+| `base_<sid>.cwd` | `cd <quoted-pwd>` | base shell lifetime |
 | `rc_<prof>_<sess_sid>` | generated rcfile | single profile session |
 | `<sess_sid>.pre` | alias baseline at entry | single profile session |
 | `<sess_sid>.cur` | alias state at exit | single profile session |
 
-`<sid>` = `<BASHPID>_<PID>` (stable per base shell). `<sess_sid>` = `<root_sid>_g<gen>` (gen increments per switch).
+`<sid>` = `<BASHPID>_<PID>` (stable per base shell). `<sess_sid>` = `<base_sid>_g<gen>` (gen increments per switch).
 
 ### Lineage markers (exported into profile shells)
 
 | var | meaning |
 |---|---|
-| `WE_ROOT_SID` | root snapshot sid (absent in base shell) |
+| `WE_BASE_SID` | base snapshot sid (absent in base shell) |
 | `WE_SESSION_SID` | this session's sid |
 | `WE_SESSION_GEN` | generation counter (1, 2, 3, …) |
 | `WE_PROFILE` | current profile name |
@@ -95,7 +95,7 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 |---|---|---|
 | initial port | `fbcc918` | ✅ |
 | Phase 0: test harness | `39959e9` | ✅ 40/40 |
-| Phase 1: root snapshot + lineage | `70162b2` | ✅ 40/40 |
+| Phase 1: base snapshot + lineage | `70162b2` | ✅ 40/40 |
 | Phase 2: profile switching (exec) | `764f99e` | ✅ 51/51 |
 | Phase 3: lifecycle rework | `f8aa1f5` | ✅ 52/52 |
 | Phase 4: edge cases & hardening | `3292ff8` | ✅ 68/68 |
@@ -117,7 +117,7 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 - Universal base aliases/functions (inherited by all profiles)
 - Profile shadowing of base aliases (walias = persistent, plain alias = session-only)
 - Shared history (live cross-terminal via PROMPT_COMMAND)
-- Lifecycle: per-session cleanup, root cleanup on base exit, 1-day sweep
+- Lifecycle: per-session cleanup, base cleanup on base exit, 1-day sweep
 - Name validation (rejects builtins, commands, `we`, `alias`)
 - Spaces-in-paths support
 - Extglob function parse safety
@@ -151,9 +151,9 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 | T6 | 3 | state cleanup |
 | T7 | 2 | we del |
 | T8 | 11 | profile switching |
-| T9 | 1 | root cleanup on base exit |
+| T9 | 1 | base cleanup on base exit |
 | T10 | 4 | same-profile switch |
-| T11 | 2 | root snapshot deleted |
+| T11 | 2 | base snapshot deleted |
 | T12 | 3 | create inside profile |
 | T13 | 5 | long switch chain |
 | T14 | 2 | del current profile guard |
@@ -206,7 +206,7 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 6. **`set -u` in heredocs**: use `${VAR-}` for optional vars.
 7. **Profile name = builtin**: `cd() { we_enter 'cd'; }` shadows the builtin. Fixed by refusing builtin/command names.
 8. **`funcs.sh` lost during break-test**: `git checkout` reverted uncommitted changes. Lesson: commit before break-tests.
-9. **`HISTFILE` inheritance via exec**: non-exported `HISTFILE` is NOT inherited by exec'd bash. The profile gets it from the root snapshot. `history -n` in `_we_hist_sync` (via PROMPT_COMMAND) is the actual live-sharing mechanism, not `history -r`.
+9. **`HISTFILE` inheritance via exec**: non-exported `HISTFILE` is NOT inherited by exec'd bash. The profile gets it from the base snapshot. `history -n` in `_we_hist_sync` (via PROMPT_COMMAND) is the actual live-sharing mechanism, not `history -r`.
 10. **PROMPT_COMMAND array form** (bash 5.1+): must handle both `declare -a` and string forms.
 
 ### Development preferences
@@ -241,7 +241,7 @@ Build a robust bash alias/function profile manager (`we`) that lets users create
 - **Real profiles** (21): ai, cflow, cofi, cofiw, ctab, dbg3, foo, idea, it, itax, maths, mock, mu, music, nws, os, pos, sc, u, ub, wind.
 - **Real base aliases**: 9 in `~/.we/we_alias`.
 - **State dir**: `~/.we/state/` — should be empty when no profiles are active.
-- **Contaminated tool environment**: the persistent tool shell may have `WE_PROFILE=ai`, `WE_SESSION_SID`, `WE_ROOT_SID` set. Use `env -i` or `unset` for clean tests.
+- **Contaminated tool environment**: the persistent tool shell may have `WE_PROFILE=ai`, `WE_SESSION_SID`, `WE_BASE_SID` set. Use `env -i` or `unset` for clean tests.
 - **Python venv**: `/ai/.venv/bin/python` is the designated Python environment (not used by `we` itself, but required by the harness).
 - **AI credit**: developed using Qwen 3.8 27B inside Pi Coding Agent, cross-referencing a v1 prototype.
 - **The v1 prototype** lived in `~/.we` before the v2 rewrite. It used aliases for profile entry, `unalias -a` for cleanup, and rewired the current shell in place. v2 replaced all of this with functions, child bash, and snapshot/restore.

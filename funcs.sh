@@ -302,7 +302,7 @@ _we_profile_exit_save() {
 #   Remove this session's transient files (rcfile + pre/cur baseline). Called
 #   from the profile subshell's EXIT trap so every session cleans up after
 #   itself -- including the last profile in a switch chain, whose files the
-#   original parent we_enter cannot know about. The root snapshot is never
+#   original parent we_enter cannot know about. The base snapshot is never
 #   touched here.
 # ---------------------------------------------------------------------------
 _we_session_cleanup() {
